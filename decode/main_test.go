@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -98,6 +100,119 @@ func TestDummy(t *testing.T) {
 // func TestSpecificFunction(t *testing.T) { ... }
 // However, main() is hard to unit test directly without significant refactoring.
 // For now, the E2E guidance is the most practical.
+
+func TestEndToEnd_EncodeDecode(t *testing.T) {
+	_, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not found in PATH, skipping end-to-end test")
+	}
+
+	// 1. Create temporary directory for all test artifacts
+	testDir, err := os.MkdirTemp("", "qrvid_e2e_test_")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory for E2E test: %v", err)
+	}
+	defer func() {
+		if err := os.RemoveAll(testDir); err != nil {
+			t.Logf("Warning: failed to remove temp test directory %s: %v", testDir, err)
+		}
+	}()
+
+	encoderExePath := filepath.Join(testDir, "qrvidencoder_e2e")
+	decoderExePath := filepath.Join(testDir, "qrviddecoder_e2e")
+	if runtime.GOOS == "windows" {
+		encoderExePath += ".exe"
+		decoderExePath += ".exe"
+	}
+
+	// 2. Build encoder and decoder
+	// Assuming we are in the context of the 'decode' package tests, the module root is '..'
+	// However, since we now have a single module at the repo root, adjust paths.
+	// `go build` from within a test usually means paths are relative to package dir.
+	// To build other packages in the same module, use their module paths.
+	// Or, more simply, use relative paths from the module root.
+	// For `go test ./decode/...` run from root, current dir for test is package dir.
+	// So, `../encode` and `.` (for decode) should work if test CWD is the package dir.
+	// Let's set Dir to project root ("..") for both build commands for consistency.
+
+	projectRoot := ".." // Relative path from decode test execution to project root
+
+	cmdBuildEncoder := exec.Command("go", "build", "-o", encoderExePath, "./encode")
+	cmdBuildEncoder.Dir = projectRoot
+	output, err := cmdBuildEncoder.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Failed to build encoder for E2E test (from %s): %v\nOutput:\n%s", projectRoot, err, string(output))
+	}
+
+	cmdBuildDecoder := exec.Command("go", "build", "-o", decoderExePath, "./decode")
+	cmdBuildDecoder.Dir = projectRoot
+	output, err = cmdBuildDecoder.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Failed to build decoder for E2E test (from %s): %v\nOutput:\n%s", projectRoot, err, string(output))
+	}
+
+
+	// 3. Create Sample Input File
+	sampleData := "Hello, QR Video World!\nThis is line 2 with some punctuation: &*^%$#@!\nA third line for good measure.\n"
+	sampleInputFile := filepath.Join(testDir, "sample_e2e_input.txt")
+	err = os.WriteFile(sampleInputFile, []byte(sampleData), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create sample input file: %v", err)
+	}
+
+	// 4. Define Output Paths
+	videoFile := filepath.Join(testDir, "temp_e2e_video.mp4")
+	decodedOutputFile := filepath.Join(testDir, "decoded_e2e_output.txt")
+
+	// 5. Run Encoder
+	// Use small, fast parameters for testing
+	// Chunk size needs to be small enough that metadata isn't overwhelming, but not too small.
+	// Metadata is 12 bytes (8 checksum + 4 seq). If data is 20 bytes, total is 32.
+	encodeCmd := exec.Command(encoderExePath,
+		"-inputFile", sampleInputFile,
+		"-outputFile", videoFile,
+		"-chunkSize", "20", // Small chunk size for testing
+		"-qrLevel", "L",    // Low recovery for speed, assuming clear frames
+		"-qrSize", "256",   // Default size
+		"-fps", "1",
+		"-framesPerQR", "1",
+		"-resolution", "256x256",
+	)
+	encodeOutput, err := encodeCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Encoder failed: %v\nOutput:\n%s", err, string(encodeOutput))
+	}
+	t.Logf("Encoder output:\n%s", string(encodeOutput))
+
+
+	// 6. Run Decoder
+	decodeCmd := exec.Command(decoderExePath,
+		"-inputFile", videoFile,
+		"-outputFile", decodedOutputFile,
+	)
+	decodeOutput, err := decodeCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Decoder failed: %v\nOutput:\n%s", err, string(decodeOutput))
+	}
+	t.Logf("Decoder output:\n%s", string(decodeOutput))
+
+	// 7. Compare Files
+	originalBytes, err := os.ReadFile(sampleInputFile)
+	if err != nil {
+		t.Fatalf("Failed to read original sample input file: %v", err)
+	}
+	decodedBytes, err := os.ReadFile(decodedOutputFile)
+	if err != nil {
+		t.Fatalf("Failed to read decoded output file: %v", err)
+	}
+
+	if !bytes.Equal(originalBytes, decodedBytes) {
+		t.Errorf("End-to-end test failed: Decoded data does not match original data.\nOriginal:\n%s\nDecoded:\n%s", string(originalBytes), string(decodedBytes))
+	} else {
+		t.Log("End-to-end test successful: Decoded data matches original data.")
+	}
+}
+
 
 func Example_manualTestingWorkflow() {
 	// This is not a real test but demonstrates the workflow for documentation.
