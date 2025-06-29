@@ -18,13 +18,14 @@ import (
 // The following outlines a manual/semi-automated test procedure.
 // To perform an end-to-end test:
 
-// 1. Ensure `qrvidencode` (from the ../encode directory) and `qrviddecoder` (this program)
-//    are built.
+// 1. Ensure `qrvidencode` and `qrviddecoder` (this program) are built.
+//    From the repository root, after running `go mod tidy` at the root:
 //    ```bash
 //    # From repository root
-//    (cd encode && go build -o ../qrvidencoder_test_util .)
-//    (cd decode && go build -o ../qrviddecoder_test_util .)
+//    go build -o qrvidencoder_test_util ./encode
+//    go build -o qrviddecoder_test_util ./decode
 //    ```
+//    This places the test executables in the repository root.
 
 // 2. Create a sample input file.
 //    ```bash

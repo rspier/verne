@@ -20,14 +20,12 @@ This document provides guidance for AI agents working on the `qrvidencode` Go pr
 -   **`github.com/skip2/go-qrcode`**: External Go module for QR code generation.
 -   **`github.com/cespare/xxhash/v2`**: External Go module for XXH64 checksum calculation.
 -   **`ffmpeg`**: External command-line tool. This is a runtime dependency that must be installed on the system where the program is run. The program calls `ffmpeg` directly.
-Ensure `go mod tidy` is run if dependencies change.
-
 
 ### 3. Development & Testing
 
--   **Go Modules**: The project uses Go modules. Any new external Go dependencies should be added via `go get` and managed in `go.mod` / `go.sum`.
--   **Building**: Use `go build .` within the `encode` directory.
--   **Running Tests**: Use `go test .` within the `encode` directory.
+-   **Go Modules**: The project is a single Go module at the repository root (e.g., `qrvidproject`). The root `go.mod` and `go.sum` files manage dependencies for both `encode` and `decode` packages. Run `go mod tidy` from the repository root if dependencies change.
+-   **Building**: From the repository root, use a command like `go build -o encode/qrvidencoder ./encode` or `go build -o qrvidencoder ./encode`.
+-   **Running Tests**: From the repository root, use `go test ./encode/...` (or `go test qrvidproject/encode` if using the full module path).
     -   Unit tests are in `main_test.go`.
     -   Tests for `ffmpeg` interaction are designed to be somewhat resilient to `ffmpeg` not being present in all test environments (e.g., some CI runners). They check for expected error messages if `ffmpeg` is not found.
     -   When adding tests related to `ffmpeg` output, ensure they can handle cases where `ffmpeg` might not be installed or might behave slightly differently across versions/platforms.

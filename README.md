@@ -20,13 +20,13 @@ The primary goal is to convert binary data into a sequence of QR codes which are
 
 ## Dependencies
 
-Both programs rely on:
+The project relies on:
 
--   **Go** (version 1.18+ for modules) for the core logic.
+-   **Go** (version 1.18+ for modules) for the core logic. The project is structured as a single Go module at the repository root.
 -   **`ffmpeg`** (must be installed and in system PATH) for video processing (creating videos in the encoder, extracting frames in the decoder).
--   Specific Go modules (see `go.mod` files in each subdirectory) for QR code generation/scanning and checksum calculation.
+-   Specific Go modules (see the root `go.mod` file) for QR code generation/scanning and checksum calculation.
 
-Refer to the `README.md` file within each subdirectory for detailed instructions on building, using, and understanding each program.
+Refer to the `README.md` file within each subdirectory for detailed instructions on using each program. Build instructions are generally performed from the repository root.
 
 ## License
 

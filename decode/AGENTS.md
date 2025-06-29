@@ -32,14 +32,13 @@ This document provides guidance for AI agents working on the `qrviddecode` Go pr
     -   Requires `image` and image format specific packages (e.g., `image/png`) to be imported for `image.Decode` to work.
 -   **`github.com/cespare/xxhash/v2`**: External Go module for XXH64 checksum calculation.
 -   **`ffmpeg`**: External command-line tool. This is a **runtime dependency** that must be installed on the system where the program is run. The program calls `ffmpeg` directly.
-Ensure `go mod tidy` is run if dependencies change.
 
 ### 3. Development & Testing
 
--   **Go Modules**: The project uses Go modules. Any new external Go dependencies should be added via `go get` and managed in `go.mod` / `go.sum`. Run `go mod tidy` after changes.
--   **Building**: Use `go build -o qrviddecoder .` within the `decode` directory.
+-   **Go Modules**: The project is a single Go module at the repository root (e.g., `qrvidproject`). The root `go.mod` and `go.sum` files manage dependencies for both `encode` and `decode` packages. Run `go mod tidy` from the repository root if dependencies change.
+-   **Building**: From the repository root, use a command like `go build -o decode/qrviddecoder ./decode` or `go build -o qrviddecoder ./decode`.
 -   **Running Tests**:
-    -   Use `go test .` within the `decode` directory.
+    -   From the repository root, use `go test ./decode/...` (or `go test qrvidproject/decode` if using the full module path).
     -   The `main_test.go` file contains primarily a placeholder and instructions for manual end-to-end testing due to the reliance on `ffmpeg` and the encoder program.
     -   For true E2E testing, you'll need to:
         1.  Build the encoder from `../encode`.

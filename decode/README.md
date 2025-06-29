@@ -18,33 +18,42 @@ This program decodes data from a video file that was previously encoded as a seq
 
 ## Setup and Build
 
-1.  **Navigate to the `decode` directory:**
+This program is part of a single Go module at the repository root.
+
+1.  **Navigate to the repository root directory.**
     ```bash
-    cd path/to/yourproject/decode
+    cd path/to/yourproject
     ```
-2.  **Fetch dependencies (if not already done or if `go.mod` changed):**
-    This will download the `github.com/makiuchi-d/gozxing` library and its dependencies.
+2.  **Fetch dependencies (if not already done):**
+    This command, run from the root, will download all necessary libraries for both the encoder and decoder.
     ```bash
     go mod tidy
     ```
-3.  **Build the executable:**
+3.  **Build the decoder executable:**
+    Run this command from the repository root.
     ```bash
-    go build -o qrviddecoder .
+    go build -o qrviddecoder ./decode
     ```
-    This will create an executable file named `qrviddecoder` (or `qrviddecoder.exe` on Windows) in the current directory.
+    This will create an executable file named `qrviddecoder` (or `qrviddecoder.exe` on Windows) in the repository root directory.
+    To place it inside the `decode` directory:
+    ```bash
+    go build -o decode/qrviddecoder ./decode
+    ```
 
 ## Usage
 
-Run the compiled program from your terminal:
-
+If you built `qrviddecoder` in the repository root:
 ```bash
 ./qrviddecoder -inputFile <path_to_input_video.mp4> -outputFile <path_to_decoded_data> [options]
 ```
-
-Or, using `go run` (useful for quick tests without explicit building):
-
+If you built it into the `decode` directory (e.g., `decode/qrviddecoder`):
 ```bash
-go run main.go -inputFile <path_to_input_video.mp4> -outputFile <path_to_decoded_data> [options]
+./decode/qrviddecoder -inputFile <path_to_input_video.mp4> -outputFile <path_to_decoded_data> [options]
+```
+
+Or, using `go run` from the repository root (useful for quick tests):
+```bash
+go run ./decode/main.go -inputFile <path_to_input_video.mp4> -outputFile <path_to_decoded_data> [options]
 ```
 
 ### Command-Line Flags
