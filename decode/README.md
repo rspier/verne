@@ -76,14 +76,22 @@ go run main.go -inputFile <path_to_input_video.mp4> -outputFile <path_to_decoded
 3.  `ffmpeg` is invoked to extract frames from the input video file (`-inputFile`) into the temporary directory as PNG images.
     *   The `-framesToSkip` flag controls how many initial frames are ignored.
     *   The `-maxFramesToProcess` flag can limit how many frames are extracted after the skipped ones.
-4.  The program iterates through the extracted frame images in sequence.
+4.  The program iterates through the extracted frame images in sequence (filenames are sorted).
 5.  For each frame:
     a.  The image is loaded.
     b.  The `gozxing` library attempts to find and decode a QR code within the image.
-    c.  If a QR code is found, its data payload is retrieved.
-    d.  To handle cases where a single QR code (representing one data chunk) is displayed across multiple video frames, the program only stores the payload if it's different from the *immediately preceding successfully decoded payload*. This ensures each unique piece of data is only recorded once.
-6.  All unique, sequential data payloads are concatenated.
-7.  The resulting combined data is written to the specified output file (`-outputFile`).
+    c.  If a QR code is found, its raw payload (a string of bytes) is processed. To avoid reprocessing identical QR codes from consecutive video frames, a map of seen raw payloads is maintained.
+    d.  The raw payload is parsed to extract:
+        i.  An 8-byte XXH64 checksum.
+        ii. A 4-byte sequence number (uint32, BigEndian).
+        iii. The original data chunk.
+    e.  The checksum of `[sequence_number_bytes][original_data_chunk_bytes]` is recalculated and compared against the received checksum. If it mismatches, the chunk is discarded.
+    f.  Valid chunks (original data part) are stored in a map, keyed by their sequence number. This handles out-of-order frame processing or QR detection. Only the first valid instance of a sequence number is stored.
+6.  After all frames are processed, the program reconstructs the original data:
+    a.  It iterates from sequence number 0 up to the maximum sequence number encountered.
+    b.  Data chunks are retrieved from the map in order.
+    c.  If any sequence number is missing, an error is reported, and the output data will be incomplete.
+7.  The concatenated, ordered data is written to the specified output file (`-outputFile`).
 8.  The temporary directory containing the frame images is deleted.
 
 ## Note on `ffmpeg`

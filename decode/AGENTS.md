@@ -9,23 +9,30 @@ This document provides guidance for AI agents working on the `qrviddecode` Go pr
     -   It uses the external `ffmpeg` command-line tool (via `os/exec`) to extract frames from the input video. These frames are saved as PNG images in a temporary directory.
     -   Command-line flags `-framesToSkip` and `-maxFramesToProcess` control which frames are extracted.
     -   The `ffmpeg` command construction is critical. Pay attention to input (`-i`), video filter (`-vf select`), frame limiting (`-frames:v`), and output pattern (`frame_%06d.png`).
--   **QR Code Decoding (`gozxing`)**:
-    -   Each extracted frame image is processed.
-    -   The `github.com/makiuchi-d/gozxing` library is used to detect and decode QR codes from these images.
-    -   The program is designed to be flexible: if a frame doesn't contain a scannable QR code, it's skipped.
--   **Data Deduplication & Ordering**:
-    -   Extracted frames are processed in sequence (sorted by filename).
-    -   To handle the case where one QR code (one data chunk) is displayed for multiple video frames (as per `framesPerQR` in the encoder), the decoder only appends the textual data from a QR code if it's different from the *immediately preceding successfully decoded QR code's data*. This ensures each unique data chunk is recorded once and in the correct order.
--   **Data Output**: The concatenated, unique data payloads from the QR codes are written to an output file (`-outputFile`).
+-   **QR Code Payload Processing (`gozxing`, `xxhash`)**:
+    -   Each extracted frame image is processed using `github.com/makiuchi-d/gozxing` to detect and decode QR codes.
+    -   If a QR code is found, its raw payload (string of bytes) is processed.
+    -   **Deduplication of Raw Payloads**: A map of seen raw QR payloads (`seenRawPayloads`) is used to quickly skip reprocessing the exact same QR code if it appears on consecutive video frames.
+    -   **Payload Parsing**: The raw payload is expected to be structured as:
+        1.  8-byte XXH64 checksum (BigEndian).
+        2.  4-byte sequence number (uint32, BigEndian).
+        3.  The original data chunk.
+    -   **Checksum Validation**: The XXH64 checksum of `[sequence_number_bytes][original_data_chunk_bytes]` is recalculated using `github.com/cespare/xxhash/v2` and compared against the received checksum. If mismatched, the chunk is discarded.
+-   **Data Storage and Ordering**:
+    -   Valid data chunks (the original data part) are stored in a map (`decodedChunks`), keyed by their sequence number. This handles out-of-order frame detection and ensures only one copy of each sequence-numbered chunk is stored (first one seen with a valid checksum wins).
+    -   The maximum sequence number encountered is tracked.
+-   **Data Output**: After all frames are processed, the program reconstructs the full data by iterating from sequence number 0 to the maximum sequence number seen, appending chunks from the `decodedChunks` map. If any sequence numbers are missing, an error is reported, and the output data may be incomplete. The concatenated data is written to `-outputFile`.
 -   **Temporary Files**: A temporary directory (prefix `-tempDirPrefix`) is created to store intermediate frame PNG files. This directory is cleaned up using `defer os.RemoveAll()`.
 
 ### 2. Dependencies
 
--   **Go Standard Library**: Used for file operations, command-line flags, `os/exec`, image processing stubs, etc.
+-   **Go Standard Library**: Used for file operations, command-line flags, `os/exec`, `encoding/binary`, `bytes`, image processing stubs, etc.
 -   **`github.com/makiuchi-d/gozxing`**: External Go module for QR code decoding.
     -   Includes sub-packages like `github.com/makiuchi-d/gozxing/qrcode`.
     -   Requires `image` and image format specific packages (e.g., `image/png`) to be imported for `image.Decode` to work.
+-   **`github.com/cespare/xxhash/v2`**: External Go module for XXH64 checksum calculation.
 -   **`ffmpeg`**: External command-line tool. This is a **runtime dependency** that must be installed on the system where the program is run. The program calls `ffmpeg` directly.
+Ensure `go mod tidy` is run if dependencies change.
 
 ### 3. Development & Testing
 
@@ -52,6 +59,12 @@ This document provides guidance for AI agents working on the `qrviddecode` Go pr
 -   **`ffmpeg` Command Interaction**: This is a common source of issues.
     -   Ensure the command arguments are correct and robust.
     -   Handle potential errors from `ffmpeg` (e.g., file not found, invalid video format, `ffmpeg` not installed).
+-   **QR Code Payload Parsing and Validation**:
+    -   The structure `[checksum (8B)][sequence_number (4B)][data]` is critical. Ensure parsing logic (byte slicing, `binary.BigEndian` usage) correctly extracts these fields.
+    -   Checksum validation using `xxhash.Sum64` must cover the same byte range as the encoder (`sequence_number_bytes + data_bytes`).
+-   **Sequence Number Handling**:
+    -   The system relies on 0-indexed, contiguous sequence numbers.
+    -   Detection of missing sequence numbers during final assembly is important for data integrity assessment.
 -   **QR Code Scanning Robustness**:
     -   The current implementation uses default decoding hints. If specific types of QR codes are problematic, hints might need to be passed to `qrReader.Decode()`.
     -   Image quality from `ffmpeg` can affect QR scanning. Default PNG extraction is usually good.
@@ -61,10 +74,11 @@ This document provides guidance for AI agents working on the `qrviddecode` Go pr
 ### 5. Potential Future Enhancements (If Requested)
 
 -   **Pure Go Frame Extraction**: Replacing `ffmpeg` for frame extraction would remove the main external binary dependency but is a very complex task (requires Go libraries for video demuxing and decoding).
--   **More Sophisticated Deduplication**: The current deduplication logic is simple (compare with last). For extremely noisy videos, a more robust system (e.g., content-based hashing of payloads over a small window) might be considered, but adds complexity.
--   **Error Correction/Reporting**: If some QR codes are consistently missed, providing more detailed feedback or attempting error correction on image processing (e.g. contrast adjustment) could be options, but are advanced.
+-   **More Sophisticated Error Handling for Missing Chunks**: Allow configurable behavior for missing chunks (e.g., fill with zeros, use special marker, strict fail).
+-   **Sliding Window for Deduplication/Ordering**: For very large numbers of chunks or extremely out-of-order frames, a more memory-efficient approach than holding all chunks in a map might be needed, though this adds complexity.
 -   **Support for other QR libs**: If `gozxing` has issues, other libs could be explored.
 
 When making changes, ensure that the `README.md` is updated if command-line flags, build steps, or dependencies change.
 Ensure `go test .` (even with its current manual focus) can be run and any actual unit tests pass.
 Verify the manual end-to-end test procedure still works.
+Remember to run `go mod tidy` after changing dependencies.

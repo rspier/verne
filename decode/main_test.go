@@ -32,10 +32,14 @@ import (
 //    ```
 
 // 3. Encode the sample file using `qrvidencoder_test_util`.
+//    The `-chunkSize` now refers to the size of the original data payload per QR code.
+//    The actual data encoded in each QR will be `chunkSize + 8 (checksum) + 4 (sequence number)` bytes.
+//    Ensure your QR parameters (size, recovery level) can accommodate this.
 //    ```bash
-//    ./qrvidencoder_test_util -inputFile sample_input.txt -outputFile test_video.mp4 -chunkSize 20 -qrLevel M -fps 1 -framesPerQR 1
+//    ./qrvidencoder_test_util -inputFile sample_input.txt -outputFile test_video.mp4 -chunkSize 20 -qrLevel M -qrSize 256 -fps 1 -framesPerQR 1
 //    ```
-//    (Adjust parameters as needed for different test cases, e.g., higher framesPerQR)
+//    (Adjust parameters as needed for different test cases, e.g., higher framesPerQR, different chunkSize)
+//    If you use a very small `chunkSize`, the metadata overhead (12 bytes) will be significant.
 
 // 4. Decode the video using `qrviddecoder_test_util`.
 //    ```bash

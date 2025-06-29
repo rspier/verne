@@ -8,8 +8,19 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"encoding/binary" // For converting sequence number to bytes
 
+	"github.com/cespare/xxhash/v2" // For XXH64 checksum
 	qrcode "github.com/skip2/go-qrcode"
+)
+
+const (
+	// Size of the XXH64 checksum in bytes
+	checksumSize = 8
+	// Size of the sequence number (uint32) in bytes
+	sequenceNumberSize = 4
+	// Total metadata size per chunk
+	metadataHeaderSize = checksumSize + sequenceNumberSize
 )
 
 // Enum for QR Code recovery level
@@ -126,11 +137,34 @@ func main() {
 
 	// Generate and save QR code images
 	imageFilePaths := []string{}
-	for i, chunk := range chunks {
-		// Generate QR code for this chunk
-		qr, err := qrcode.New(string(chunk), qrRecoveryLevel)
+	for i, originalChunk := range chunks {
+		sequenceNum := uint32(i) // Using 0-based indexing for sequence number
+
+		// Prepare sequence number bytes (BigEndian)
+		seqNumBytes := make([]byte, sequenceNumberSize)
+		binary.BigEndian.PutUint32(seqNumBytes, sequenceNum)
+
+		// Data to be checksummed: sequence number + original data chunk
+		dataToChecksum := append(seqNumBytes, originalChunk...)
+
+		// Calculate XXH64 checksum
+		digest := xxhash.Sum64(dataToChecksum)
+		checksumBytes := make([]byte, checksumSize)
+		binary.BigEndian.PutUint64(checksumBytes, digest)
+
+		// Final payload for QR code: checksum + sequence number + original data
+		finalPayload := append(checksumBytes, dataToChecksum...)
+
+		if len(finalPayload) > qrSize*qrSize { // A very rough check, actual QR capacity is complex
+			fmt.Fprintf(os.Stderr, "Warning: payload size for chunk %d (%d bytes) might be too large for QR code parameters. QR Capacity depends on version and error correction level.\n", i, len(finalPayload))
+		}
+
+		// Generate QR code for this finalPayload
+		// Note: The QR code library expects a string. For binary data, this is okay
+		// as long as the decoder interprets it as bytes.
+		qr, err := qrcode.New(string(finalPayload), qrRecoveryLevel)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error generating QR code for chunk %d: %v\n", i+1, err)
+			fmt.Fprintf(os.Stderr, "Error generating QR code for chunk %d (seq %d): %v\n", i, sequenceNum, err)
 			continue
 		}
 		qr.DisableBorder = false // Ensure the standard border/quiet zone is active.
@@ -139,11 +173,11 @@ func main() {
 		frameFileName := filepath.Join(tempDir, fmt.Sprintf("qr_frame_%04d.png", i))
 		err = qr.WriteFile(qrSize, frameFileName)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing QR code PNG for chunk %d to %s: %v\n", i+1, frameFileName, err)
+			fmt.Fprintf(os.Stderr, "Error writing QR code PNG for chunk %d (seq %d) to %s: %v\n", i, sequenceNum, frameFileName, err)
 			continue
 		}
 		imageFilePaths = append(imageFilePaths, frameFileName)
-		fmt.Printf("Generated QR code for chunk %d: %s\n", i+1, frameFileName)
+		fmt.Printf("Generated QR code for chunk %d (seq %d), payload size %d bytes: %s\n", i, sequenceNum, len(finalPayload), frameFileName)
 	}
 
 	if len(imageFilePaths) == 0 {
