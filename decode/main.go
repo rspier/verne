@@ -183,14 +183,20 @@ func main() {
 			continue
 		}
 
-		rawPayloadString := result.GetText()
-		if _, seen := seenRawPayloads[rawPayloadString]; seen {
+		// Use GetRawBytes for more robust handling of binary data
+		rawPayloadBytes := result.GetRawBytes()
+		// GetRawBytes() itself does not return an error in gozxing.
+		// If result is nil or rawBytes are nil, subsequent checks should handle it,
+		// or the decode operation itself would have failed earlier.
+
+		// Deduplicate based on the raw byte content of the QR code
+		// Convert to string for map key, as []byte cannot be map keys directly.
+		rawPayloadKey := string(rawPayloadBytes)
+		if _, seen := seenRawPayloads[rawPayloadKey]; seen {
 			// fmt.Printf("Frame %d (%s): Duplicate raw QR payload already processed. Skipping.\n", frameIdx+1, filepath.Base(framePath))
 			continue
 		}
-		seenRawPayloads[rawPayloadString] = true // Mark this raw payload as processed.
-
-		rawPayloadBytes := []byte(rawPayloadString)
+		seenRawPayloads[rawPayloadKey] = true // Mark this raw payload as processed.
 
 		if len(rawPayloadBytes) < metadataHeaderSize {
 			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s): QR payload too short (%d bytes) for metadata. Skipping.\n", frameIdx+1, filepath.Base(framePath), len(rawPayloadBytes))
