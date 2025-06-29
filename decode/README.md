@@ -1,0 +1,92 @@
+# QR Code Video Decoder
+
+This program decodes data from a video file that was previously encoded as a sequence of QR codes (e.g., by the `qrvidencode` program). It extracts frames from the video, scans them for QR codes, and reconstructs the original data.
+
+## Features
+
+-   Extracts frames from various video formats (relies on `ffmpeg`).
+-   Scans frames for QR codes using a pure Go library.
+-   Handles videos where QR codes are displayed for multiple frames.
+-   Reconstructs the original data from the sequence of QR code payloads.
+-   Customizable frame processing (skip initial frames, limit total frames).
+
+## Dependencies
+
+-   **Go**: Version 1.18 or higher (for Go module support).
+-   **FFmpeg**: This program relies on the `ffmpeg` command-line tool to extract frames from the input video. You must have `ffmpeg` installed and accessible in your system's PATH.
+    *   Refer to the `encode/README.md` or official FFmpeg documentation for installation instructions.
+
+## Setup and Build
+
+1.  **Navigate to the `decode` directory:**
+    ```bash
+    cd path/to/yourproject/decode
+    ```
+2.  **Fetch dependencies (if not already done or if `go.mod` changed):**
+    This will download the `github.com/makiuchi-d/gozxing` library and its dependencies.
+    ```bash
+    go mod tidy
+    ```
+3.  **Build the executable:**
+    ```bash
+    go build -o qrviddecoder .
+    ```
+    This will create an executable file named `qrviddecoder` (or `qrviddecoder.exe` on Windows) in the current directory.
+
+## Usage
+
+Run the compiled program from your terminal:
+
+```bash
+./qrviddecoder -inputFile <path_to_input_video.mp4> -outputFile <path_to_decoded_data> [options]
+```
+
+Or, using `go run` (useful for quick tests without explicit building):
+
+```bash
+go run main.go -inputFile <path_to_input_video.mp4> -outputFile <path_to_decoded_data> [options]
+```
+
+### Command-Line Flags
+
+| Flag                 | Type   | Default                    | Description                                                                            |
+|----------------------|--------|----------------------------|----------------------------------------------------------------------------------------|
+| `-inputFile`         | string | (required)                 | Path to the input video file.                                                          |
+| `-outputFile`        | string | (required)                 | Path to the output file where decoded data will be written.                            |
+| `-tempDirPrefix`     | string | `qrvid_decode_frames_`     | Prefix for the temporary directory used to store extracted frames.                     |
+| `-framesToSkip`      | int    | `0`                        | Number of initial frames to skip in the video before starting QR code processing.      |
+| `-maxFramesToProcess`| int    | `0` (process all)          | Maximum number of frames to process after skipping initial frames. `0` means no limit.   |
+
+### Examples
+
+1.  **Decode `data_video.mp4` and save the original data to `retrieved_data.txt`:**
+    ```bash
+    ./qrviddecoder -inputFile data_video.mp4 -outputFile retrieved_data.txt
+    ```
+
+2.  **Decode a video, skipping the first 10 frames:**
+    ```bash
+    ./qrviddecoder -inputFile data_video.mp4 -outputFile retrieved_data.txt -framesToSkip 10
+    ```
+
+## How it Works
+
+1.  The program parses command-line arguments.
+2.  A temporary directory is created to store video frames.
+3.  `ffmpeg` is invoked to extract frames from the input video file (`-inputFile`) into the temporary directory as PNG images.
+    *   The `-framesToSkip` flag controls how many initial frames are ignored.
+    *   The `-maxFramesToProcess` flag can limit how many frames are extracted after the skipped ones.
+4.  The program iterates through the extracted frame images in sequence.
+5.  For each frame:
+    a.  The image is loaded.
+    b.  The `gozxing` library attempts to find and decode a QR code within the image.
+    c.  If a QR code is found, its data payload is retrieved.
+    d.  To handle cases where a single QR code (representing one data chunk) is displayed across multiple video frames, the program only stores the payload if it's different from the *immediately preceding successfully decoded payload*. This ensures each unique piece of data is only recorded once.
+6.  All unique, sequential data payloads are concatenated.
+7.  The resulting combined data is written to the specified output file (`-outputFile`).
+8.  The temporary directory containing the frame images is deleted.
+
+## Note on `ffmpeg`
+
+If `ffmpeg` is not found in your system's PATH, the program will fail during the frame extraction step. Ensure `ffmpeg` is installed and accessible.
+The program prints the `ffmpeg` command it attempts to execute, which can be useful for debugging.
