@@ -1,22 +1,30 @@
 {
-  "name": "webdecode",
+  "name": "webdecode-qr-video",
   "version": "1.0.0",
-  "description": "Web-based QR video decoder",
+  "description": "Web-based QR video decoder with chunking and checksums",
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc",
-    "watch": "tsc -w"
+    "watch": "tsc -w",
+    "lint": "eslint src/**/*.ts",
+    "lint:fix": "eslint src/**/*.ts --fix"
   },
   "keywords": [
     "qr",
     "video",
-    "decoder"
+    "decoder",
+    "typescript"
   ],
-  "author": "Jules",
+  "author": "Jules AI Agent",
   "license": "ISC",
   "devDependencies": {
     "typescript": "^5.0.0",
-    "@types/node": "^20.0.0"
+    "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0"
   },
-  "dependencies": {}
+  "dependencies": {
+    "xxhash-wasm": "^1.0.2"
+  }
 }

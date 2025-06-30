@@ -3,24 +3,39 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Web Decoder</title>
+    <title>Web QR Video Decoder</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <h1>Web Decoder</h1>
+    <h1>Web QR Video Decoder</h1>
     <div id="controls">
         <button id="startBtn">Start Capture</button>
         <button id="stopBtn" disabled>Stop Capture</button>
     </div>
     <div id="captureContainer">
-        <video id="video" autoplay playsinline></video>
+        <video id="video" autoplay playsinline muted style="display: none;"></video>
         <canvas id="canvas" style="display:none;"></canvas>
     </div>
-    <div id="outputContainer">
-        <h2>Decoded Output:</h2>
-        <div id="output"></div>
+    <div id="statusContainer">
+        <h2>Status:</h2>
+        <pre id="statusOutput">Idle.</pre>
     </div>
+    <div id="outputContainer">
+        <h2>Reassembled Output:</h2>
+        <div id="progressOverview"></div>
+        <textarea id="outputText" rows="10" cols="80" readonly></textarea>
+        <br>
+        <a id="downloadLink" style="display:none;">Download Reassembled File</a>
+        <input type="text" id="fileNameInput" placeholder="Enter filename (e.g., decoded.txt)" value="decoded_file">
+    </div>
+
+    <!-- Libraries loaded via CDN -->
+    <!-- jsQR for QR code decoding -->
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1/dist/jsQR.js"></script>
+    <!-- xxhash-wasm for XXH64 checksum calculation -->
+    <script src="https://cdn.jsdelivr.net/npm/xxhash-wasm@1.0.2/dist/xxhash-wasm.js"></script>
+
+    <!-- Application script -->
     <script src="dist/main.js"></script>
 </body>
 </html>
