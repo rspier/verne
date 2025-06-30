@@ -72,7 +72,19 @@ function updateReceivedSequenceDisplay() {
     if (totalChunksExpected !== -1) {
         statusText += `Expected total: ${totalChunksExpected}. `;
         const missing = totalChunksExpected - receivedCount;
-        statusText += missing > 0 ? `${missing} missing.` : `All expected chunks received!`;
+        if (missing === 0 && receivedCount === totalChunksExpected) {
+            statusText += `All ${totalChunksExpected} chunks received! Safe to stop capture.`;
+            // Optionally, provide a more prominent visual cue here if desired
+            if (statusOutput) { // Also update the main status line for high visibility
+                // Append to existing status or set a new one
+                statusOutput.textContent += "\nINFO: All expected chunks received. You can stop capturing.";
+                statusOutput.style.color = 'green'; // Make it stand out
+            }
+        } else if (missing > 0) {
+            statusText += `${missing} missing.`;
+        } else { // receivedCount > totalChunksExpected -- should be rare due to checks in processFrame
+            statusText += `Warning: Received ${receivedCount}, expected ${totalChunksExpected}.`;
+        }
     } else {
         statusText += `Total expected: Unknown.`;
     }
@@ -110,7 +122,7 @@ function updateReceivedSequenceDisplay() {
 function updateStatus(message: string, isError: boolean = false) {
     if (statusOutput) {
         statusOutput.textContent = message;
-        statusOutput.style.color = isError ? 'red' : 'black';
+        statusOutput.style.color = isError ? 'red' : 'black'; // Default to black, red for errors
     }
     if (isError) {
         console.error(message);
@@ -124,7 +136,7 @@ function updateStatus(message: string, isError: boolean = false) {
  */
 async function initXxhash() {
     if (startBtn) startBtn.disabled = true; // Disable start button during init
-    updateStatus('Initializing XXHash64 module...');
+    updateStatus('Initializing XXHash64 module...'); // This will set color to black
     try {
         // Check for the global xxhash function provided by the UMD script
         // Accessing through window for explicit global scope.
@@ -182,7 +194,10 @@ async function startCapture() {
         if (!h64) return; // Still not initialized
     }
 
-    updateStatus("Requesting screen capture permission...");
+    updateStatus("Requesting screen capture permission..."); // This will set color to black
+    if (statusOutput) { // Explicitly reset color if it was green from a previous run
+        statusOutput.style.color = 'black';
+    }
     try {
         stream = await navigator.mediaDevices.getDisplayMedia({
             video: {
