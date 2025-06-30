@@ -47,29 +47,33 @@ This program is part of a single Go module at the repository root.
 
 ## Usage
 
+The input file is now a positional argument.
+
 If you built `qrvidencoder` in the repository root:
 ```bash
-./qrvidencoder -inputFile <path_to_input_file> [options]
+./qrvidencoder <path_to_input_file> --out <output_video.mp4> [options]
 ```
 If you built it into the `encode` directory (e.g., `encode/qrvidencoder`):
 ```bash
-./encode/qrvidencoder -inputFile <path_to_input_file> [options]
+./encode/qrvidencoder <path_to_input_file> --out <output_video.mp4> [options]
 ```
 
 Or, using `go run` from the repository root (useful for quick tests):
 ```bash
-go run ./encode/main.go -inputFile <path_to_input_file> [options]
+go run ./encode/main.go <path_to_input_file> --out <output_video.mp4> [options]
 ```
 
-### Command-Line Flags
+### Arguments & Flags
 
+**Positional Arguments:**
+1.  `<input_file_path>` (required): Path to the input file containing the data to encode.
+
+**Flags:**
 | Flag            | Type   | Default     | Description                                                                 |
 |-----------------|--------|-------------|-----------------------------------------------------------------------------|
-| `-inputFile`    | string | (required)  | Path to the input file containing the data to encode.                       |
-| `-outputFile`   | string | `output.mp4`| Path to the output video file.                                              |
-| `-chunkSize`    | int    | `1024`      | Size of data chunks in bytes. Each chunk becomes one QR code.               |
-| `-qrLevel`      | string | `M`         | QR code recovery level. Options: `L` (Low), `M` (Medium), `Q` (Quartile), `H` (High). |
-| `-qrSize`       | int    | `256`       | Size (width and height) of the generated QR code image in pixels.           |
+| `--out`         | string | `output.mp4`| Path to the output video file.                                              |
+| `--chunkSize`   | int    | `1024`      | Size of original data chunks in bytes (metadata will be added).             |
+| `--qrSize`      | int    | `256`       | Size (width and height) of the generated QR code image in pixels.           |
 | `-fps`          | int    | `1`         | Frames per second for the output video.                                     |
 | `-framesPerQR`  | int    | `1`         | Number of video frames each QR code image is displayed for.                 |
 | `-resolution`   | string | `256x256`   | Video resolution in `WIDTHxHEIGHT` format (e.g., "1280x720"). Defaults to QR size. |
@@ -78,22 +82,21 @@ go run ./encode/main.go -inputFile <path_to_input_file> [options]
 
 1.  **Encode a text file `mydata.txt` into `data_video.mp4` with default settings:**
     ```bash
-    ./qrvidencoder -inputFile mydata.txt -outputFile data_video.mp4
+    ./qrvidencoder mydata.txt --out data_video.mp4
     ```
 
-2.  **Encode `archive.zip` with smaller chunks, higher QR recovery, and specific video settings:**
+2.  **Encode `archive.zip` with smaller chunks and specific video settings:**
+    (Note: QR Level flag was removed, encoder defaults to Medium. It can be re-added if needed.)
     ```bash
-    ./qrvidencoder \
-        -inputFile archive.zip \
-        -outputFile archive_qr.mp4 \
-        -chunkSize 512 \
-        -qrLevel H \
-        -qrSize 512 \
-        -fps 5 \
-        -framesPerQR 2 \
-        -resolution 512x512
+    ./qrvidencoder archive.zip \
+        --out archive_qr.mp4 \
+        --chunkSize 512 \
+        --qrSize 512 \
+        --fps 5 \
+        --framesPerQR 2 \
+        --resolution 512x512
     ```
-    In this example, each QR code (512x512px) will represent 512 bytes of `archive.zip`. The video will be 5 FPS, and each QR code will be displayed for 2 frames (i.e., 2/5 = 0.4 seconds).
+    In this example, each QR code (512x512px) will represent 512 bytes of `archive.zip` (plus header data). The video will be 5 FPS, and each QR code will be displayed for 2 frames (i.e., 2/5 = 0.4 seconds).
 
 ## How it Works
 

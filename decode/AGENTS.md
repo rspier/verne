@@ -4,24 +4,23 @@ This document provides guidance for AI agents working on the `qrviddecode` Go pr
 
 ### 1. Core Logic
 
--   **Video Input**: The program takes a video file as input (`-inputFile`). This video is expected to contain a sequence of QR codes.
+-   **Video Input**: The program takes a video file path as a **positional argument**. This video is expected to contain a sequence of QR codes.
 -   **Frame Extraction (`ffmpeg`)**:
     -   It uses the external `ffmpeg` command-line tool (via `os/exec`) to extract frames from the input video. These frames are saved as PNG images in a temporary directory.
-    -   Command-line flags `-framesToSkip` and `-maxFramesToProcess` control which frames are extracted.
+    -   Command-line flags `--framesToSkip` and `--maxFramesToProcess` control which frames are extracted.
     -   The `ffmpeg` command construction is critical. Pay attention to input (`-i`), video filter (`-vf select`), frame limiting (`-frames:v`), and output pattern (`frame_%06d.png`).
--   **QR Code Payload Processing (`gozxing`, `xxhash`)**:
+-   **QR Code Payload Processing (`gozxing`, `encoding/hex`, `encoding/binary`, `xxhash`)**:
     -   Each extracted frame image is processed using `github.com/makiuchi-d/gozxing` to detect and decode QR codes.
-    -   If a QR code is found, its raw payload (string of bytes) is processed.
-    -   **Deduplication of Raw Payloads**: A map of seen raw QR payloads (`seenRawPayloads`) is used to quickly skip reprocessing the exact same QR code if it appears on consecutive video frames.
-    -   **Payload Parsing**: The raw payload is expected to be structured as:
-        1.  8-byte XXH64 checksum (BigEndian).
-        2.  4-byte sequence number (uint32, BigEndian).
-        3.  The original data chunk.
-    -   **Checksum Validation**: The XXH64 checksum of `[sequence_number_bytes][original_data_chunk_bytes]` is recalculated using `github.com/cespare/xxhash/v2` and compared against the received checksum. If mismatched, the chunk is discarded.
+    -   If a QR code is found, its text content (which is expected to be a hex string) is retrieved using `result.GetText()`.
+    -   **Deduplication of Hex Payloads**: A map of seen hex string payloads (`seenRawPayloads`) is used to quickly skip reprocessing the exact same QR code if it appears on consecutive video frames.
+    -   **Hex Decoding**: The retrieved hex string is decoded into its original binary form (`rawPayloadBytes`).
+    -   **Header Deserialization**: A `ChunkHeader` struct is deserialized from the beginning of `rawPayloadBytes` using `encoding/binary.Read` (BigEndian). This header contains `Checksum (uint64)`, `SequenceNum (uint32)`, and `DataLength (uint32)`.
+    -   **Data Extraction**: The `OriginalData` is extracted from `rawPayloadBytes` immediately following the header, using `header.DataLength`.
+    -   **Checksum Validation**: The checksum is verified. It was calculated in the encoder over: `SequenceNum` bytes + `DataLength` bytes + `OriginalData` bytes. This sequence is reconstructed and checksummed again. If mismatched with `header.Checksum`, the chunk is discarded.
 -   **Data Storage and Ordering**:
-    -   Valid data chunks (the original data part) are stored in a map (`decodedChunks`), keyed by their sequence number. This handles out-of-order frame detection and ensures only one copy of each sequence-numbered chunk is stored (first one seen with a valid checksum wins).
+    -   Valid `OriginalData` chunks are stored in a map (`decodedChunks`), keyed by their `header.SequenceNum`.
     -   The maximum sequence number encountered is tracked.
--   **Data Output**: After all frames are processed, the program reconstructs the full data by iterating from sequence number 0 to the maximum sequence number seen, appending chunks from the `decodedChunks` map. If any sequence numbers are missing, an error is reported, and the output data may be incomplete. The concatenated data is written to `-outputFile`.
+-   **Data Output**: After all frames are processed, the program reconstructs the full data by iterating from sequence number 0 to the maximum sequence number seen, appending chunks from the `decodedChunks` map. If any sequence numbers are missing, an error is reported. The concatenated data is written to the file specified by `--out`.
 -   **Temporary Files**: A temporary directory (prefix `-tempDirPrefix`) is created to store intermediate frame PNG files. This directory is cleaned up using `defer os.RemoveAll()`.
 
 ### 2. Dependencies

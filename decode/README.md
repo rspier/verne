@@ -42,40 +42,45 @@ This program is part of a single Go module at the repository root.
 
 ## Usage
 
+The input video file is now a positional argument.
+
 If you built `qrviddecoder` in the repository root:
 ```bash
-./qrviddecoder -inputFile <path_to_input_video.mp4> -outputFile <path_to_decoded_data> [options]
+./qrviddecoder <path_to_input_video.mp4> --out <path_to_decoded_data> [options]
 ```
 If you built it into the `decode` directory (e.g., `decode/qrviddecoder`):
 ```bash
-./decode/qrviddecoder -inputFile <path_to_input_video.mp4> -outputFile <path_to_decoded_data> [options]
+./decode/qrviddecoder <path_to_input_video.mp4> --out <path_to_decoded_data> [options]
 ```
 
 Or, using `go run` from the repository root (useful for quick tests):
 ```bash
-go run ./decode/main.go -inputFile <path_to_input_video.mp4> -outputFile <path_to_decoded_data> [options]
+go run ./decode/main.go <path_to_input_video.mp4> --out <path_to_decoded_data> [options]
 ```
 
-### Command-Line Flags
+### Arguments & Flags
 
+**Positional Arguments:**
+1.  `<input_video_path>` (required): Path to the input video file.
+
+**Flags:**
 | Flag                 | Type   | Default                    | Description                                                                            |
 |----------------------|--------|----------------------------|----------------------------------------------------------------------------------------|
-| `-inputFile`         | string | (required)                 | Path to the input video file.                                                          |
-| `-outputFile`        | string | (required)                 | Path to the output file where decoded data will be written.                            |
-| `-tempDirPrefix`     | string | `qrvid_decode_frames_`     | Prefix for the temporary directory used to store extracted frames.                     |
-| `-framesToSkip`      | int    | `0`                        | Number of initial frames to skip in the video before starting QR code processing.      |
-| `-maxFramesToProcess`| int    | `0` (process all)          | Maximum number of frames to process after skipping initial frames. `0` means no limit.   |
+| `--out`              | string | (required)                 | Path to the output file where decoded data will be written.                            |
+| `--tempDirPrefix`    | string | `qrvid_decode_frames_`     | Prefix for the temporary directory used to store extracted frames.                     |
+| `--framesToSkip`     | int    | `0`                        | Number of initial frames to skip in the video before starting QR code processing.      |
+| `--maxFramesToProcess`| int    | `0` (process all)          | Maximum number of frames to process after skipping initial frames. `0` means no limit.   |
 
 ### Examples
 
 1.  **Decode `data_video.mp4` and save the original data to `retrieved_data.txt`:**
     ```bash
-    ./qrviddecoder -inputFile data_video.mp4 -outputFile retrieved_data.txt
+    ./qrviddecoder data_video.mp4 --out retrieved_data.txt
     ```
 
 2.  **Decode a video, skipping the first 10 frames:**
     ```bash
-    ./qrviddecoder -inputFile data_video.mp4 -outputFile retrieved_data.txt -framesToSkip 10
+    ./qrviddecoder data_video.mp4 --out retrieved_data.txt --framesToSkip 10
     ```
 
 ## How it Works

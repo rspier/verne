@@ -1,26 +1,20 @@
 package main
 
 import (
-	// "bytes" // No longer needed after removing stdout/stderr capture
-	"flag"
-	"fmt" // Re-added
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
-
-	qrcode "github.com/skip2/go-qrcode"
+	// No longer need "flag" or "fmt" here if not used by other tests
 )
 
-// Helper function to reset flags for testing
+// Helper function to reset package-level flag variables if used by any test.
+// runEncoderApp uses its own FlagSet, so this is mainly for consistency if other tests were to modify them.
 func resetFlags() {
-	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
-
-	inputFile = ""
 	outputFile = "output.mp4"
 	chunkSize = 1024
-	// qrLevelFlag removed
 	qrSize = 256
 	fps = 1
 	framesPerQR = 1
@@ -29,11 +23,11 @@ func resetFlags() {
 
 func TestParseResolution(t *testing.T) {
 	tests := []struct {
-		name         string
-		resStr       string
-		wantWidth    int
-		wantHeight   int
-		wantErr      bool
+		name           string
+		resStr         string
+		wantWidth      int
+		wantHeight     int
+		wantErr        bool
 		expectedErrMsg string
 	}{
 		{"valid", "1920x1080", 1920, 1080, false, ""},
@@ -57,8 +51,8 @@ func TestParseResolution(t *testing.T) {
 				return
 			}
 			if err != nil && tt.wantErr && !strings.Contains(err.Error(), tt.expectedErrMsg) {
-                 t.Errorf("parseResolution(%q) error message = %q, expected to contain %q", tt.resStr, err.Error(), tt.expectedErrMsg)
-            }
+				t.Errorf("parseResolution(%q) error message = %q, expected to contain %q", tt.resStr, err.Error(), tt.expectedErrMsg)
+			}
 			if width != tt.wantWidth {
 				t.Errorf("parseResolution(%q) width = %v, want %v", tt.resStr, width, tt.wantWidth)
 			}
@@ -69,70 +63,29 @@ func TestParseResolution(t *testing.T) {
 	}
 }
 
-// TestRecoveryLevelVar is removed as the recoveryLevelVar type and associated flag are no longer used.
-// The new QR library boombuler/barcode/qr uses constants like qr.M directly.
-// If a flag for QR level is re-introduced, a new test would be needed.
-
 func TestDataChunking(t *testing.T) {
 	tests := []struct {
 		name        string
 		data        []byte
 		chunkSize   int
 		wantChunks  [][]byte
-		expectError bool
+		// expectError bool // Not used here as this test focuses on chunking logic with valid sizes
 	}{
-		{
-			name:      "empty data",
-			data:      []byte{},
-			chunkSize: 10,
-			wantChunks:  nil,
-		},
-		{
-			name:      "data smaller than chunk size",
-			data:      []byte("hello"),
-			chunkSize: 10,
-			wantChunks:  [][]byte{[]byte("hello")},
-		},
-		{
-			name:      "data equals chunk size",
-			data:      []byte("0123456789"),
-			chunkSize: 10,
-			wantChunks:  [][]byte{[]byte("0123456789")},
-		},
-		{
-			name:      "data larger than chunk size, exact multiple",
-			data:      []byte("0123456789abcdefghij"),
-			chunkSize: 10,
-			wantChunks:  [][]byte{[]byte("0123456789"), []byte("abcdefghij")},
-		},
-		{
-			name:      "data larger than chunk size, not exact multiple",
-			data:      []byte("0123456789abc"),
-			chunkSize: 10,
-			wantChunks:  [][]byte{[]byte("0123456789"), []byte("abc")},
-		},
-		{
-			name:      "chunk size 1",
-			data:      []byte("abc"),
-			chunkSize: 1,
-			wantChunks:  [][]byte{[]byte("a"), []byte("b"), []byte("c")},
-		},
-		{
-			name:        "chunk size 0 (should be prevented by flag validation or default)",
-			data:        []byte("abc"),
-			chunkSize:   0,
-			expectError: true,
-		},
+		{name: "empty data", data: []byte{}, chunkSize: 10, wantChunks: nil},
+		{name: "data smaller than chunk size", data: []byte("hello"), chunkSize: 10, wantChunks: [][]byte{[]byte("hello")}},
+		{name: "data equals chunk size", data: []byte("0123456789"), chunkSize: 10, wantChunks: [][]byte{[]byte("0123456789")}},
+		{name: "data larger than chunk size, exact multiple", data: []byte("0123456789abcdefghij"), chunkSize: 10, wantChunks: [][]byte{[]byte("0123456789"), []byte("abcdefghij")}},
+		{name: "data larger than chunk size, not exact multiple", data: []byte("0123456789abc"), chunkSize: 10, wantChunks: [][]byte{[]byte("0123456789"), []byte("abc")}},
+		{name: "chunk size 1", data: []byte("abc"), chunkSize: 1, wantChunks: [][]byte{[]byte("a"), []byte("b"), []byte("c")}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.chunkSize <= 0 && tt.expectError {
-				return
-			}
-
 			var chunks [][]byte
-			if len(tt.data) > 0 {
+			if len(tt.data) > 0 { // Ensure chunking only happens if data exists
+				if tt.chunkSize <= 0 { // Guard against invalid chunk size for this test logic
+					t.Fatalf("TestDataChunking: chunkSize must be positive, got %d", tt.chunkSize)
+				}
 				for i := 0; i < len(tt.data); i += tt.chunkSize {
 					end := i + tt.chunkSize
 					if end > len(tt.data) {
@@ -142,188 +95,126 @@ func TestDataChunking(t *testing.T) {
 				}
 			}
 
-			if len(tt.data) == 0 && len(chunks) == 0 && tt.wantChunks == nil {
-				// This is fine
-			} else if !reflect.DeepEqual(chunks, tt.wantChunks) {
-				t.Errorf("chunkData(%q, %d) got %v, want %v", string(tt.data), tt.chunkSize, chunks, tt.wantChunks)
+			if !reflect.DeepEqual(chunks, tt.wantChunks) {
+				gotStr := make([]string, len(chunks))
+				for i, c := range chunks { gotStr[i] = string(c) }
+				wantStr := make([]string, len(tt.wantChunks))
+				for i, c := range tt.wantChunks { wantStr[i] = string(c) }
+				t.Errorf("Chunking data %q with size %d: got %v, want %v", string(tt.data), tt.chunkSize, gotStr, wantStr)
 			}
 		})
 	}
 }
 
-func TestMainFunctionLogic_InputFileHandling(t *testing.T) {
-	resetFlags()
-
-	t.Run("input file not found", func(t *testing.T) {
+func TestRunEncoderApp_ArgumentHandling(t *testing.T) {
+	t.Run("input file not found returns error", func(t *testing.T) {
 		resetFlags()
-		inputFile = "nonexistentfile.txt"
-		_, err := os.ReadFile(inputFile)
+		args := []string{"qrvidencode", "nonexistentfile.txt"}
+		err := runEncoderApp(args)
 		if err == nil {
-			t.Errorf("Expected error when reading non-existent file %q, got nil.", inputFile)
+			t.Fatal("runEncoderApp did not return an error for a non-existent input file")
 		}
+		if !strings.Contains(err.Error(), "no such file or directory") && !strings.Contains(err.Error(), "nonexistentfile.txt") {
+			t.Errorf("Expected error to contain 'no such file or directory' or filename, got: %v", err)
+		}
+		t.Logf("runEncoderApp correctly returned error for non-existent file: %v", err)
 	})
 
-	t.Run("successful chunking", func(t *testing.T) {
+	t.Run("no input file provided returns error", func(t *testing.T) {
 		resetFlags()
+		args := []string{"qrvidencode"} // No positional argument
+		err := runEncoderApp(args)
+		if err == nil {
+			t.Fatal("runEncoderApp did not return an error when no input file was provided")
+		}
+		if !strings.Contains(err.Error(), "exactly one positional argument") {
+			t.Errorf("Expected error about missing positional argument, got: %v", err)
+		}
+		t.Logf("runEncoderApp correctly returned error for missing input file: %v", err)
+	})
 
-		tmpFile, err := os.CreateTemp("", "testinput*.txt")
-		if err != nil {
-			t.Fatalf("Failed to create temp file: %v", err)
+	t.Run("too many input files provided returns error", func(t *testing.T) {
+		resetFlags()
+		args := []string{"qrvidencode", "file1.txt", "file2.txt"} // Too many positional
+		err := runEncoderApp(args)
+		if err == nil {
+			t.Fatal("runEncoderApp did not return an error when too many input files were provided")
 		}
-		defer os.Remove(tmpFile.Name())
-
-		testData := "This is some test data for chunking."
-		if _, err := tmpFile.WriteString(testData); err != nil {
-			t.Fatalf("Failed to write to temp file: %v", err)
+		if !strings.Contains(err.Error(), "exactly one positional argument") {
+			t.Errorf("Expected error about too many positional arguments, got: %v", err)
 		}
-		tmpFile.Close()
-
-		inputFile = tmpFile.Name()
-		chunkSize = 10
-
-		data, err := os.ReadFile(inputFile)
-		if err != nil {
-			t.Fatalf("Failed to read input file for test: %v", err)
-		}
-
-		var chunks [][]byte
-		if len(data) > 0 {
-			for i := 0; i < len(data); i += chunkSize {
-				end := i + chunkSize
-				if end > len(data) {
-					end = len(data)
-				}
-				chunks = append(chunks, data[i:end])
-			}
-		}
-		expectedNumChunks := (len(testData) + chunkSize - 1) / chunkSize
-		if len(chunks) != expectedNumChunks {
-			t.Errorf("Expected %d chunks, got %d", expectedNumChunks, len(chunks))
-		}
-		if expectedNumChunks > 0 && string(chunks[0]) != testData[:chunkSize] {
-			t.Errorf("First chunk mismatch: got %s, want %s", string(chunks[0]), testData[:chunkSize])
-		}
+		t.Logf("runEncoderApp correctly returned error for too many input files: %v", err)
 	})
 }
 
-func TestQRCodeGenerationParams(t *testing.T) {
-	t.Run("qr generation no error", func(t *testing.T) {
-		_, err := qrcode.New("test data", qrcode.Medium)
-		if err != nil {
-			t.Errorf("qrcode.New failed: %v", err)
-		}
-
-		qr, err := qrcode.New("test", qrcode.Low)
-		if err != nil {
-			t.Fatalf("qrcode.New failed for test setup: %v", err)
-		}
-		qr.DisableBorder = false
-
-		_, err = qr.PNG(128)
-		if err != nil {
-			t.Errorf("qr.PNG(128) failed: %v", err)
-		}
-	})
-}
-
-func TestMainExecutionFlow_NoFFmpeg(t *testing.T) {
-	t.Log("TestMainExecutionFlow_NoFFmpeg: Starting test")
+func TestRunEncoderApp_FFmpegHandling(t *testing.T) {
+	t.Log("TestRunEncoderApp_FFmpegHandling: Starting test")
 	resetFlags()
 
-	tmpInputFile, err := os.CreateTemp("", "test_main_*.txt")
+	tmpInputFile, err := os.CreateTemp("", "test_ffmpeg_input_*.txt")
 	if err != nil {
 		t.Fatalf("Failed to create temp input file: %v", err)
 	}
 	defer os.Remove(tmpInputFile.Name())
-	_, err = tmpInputFile.WriteString("test")
-	if err != nil {
+	if _, err := tmpInputFile.WriteString("testdata"); err != nil {
 		t.Fatalf("Failed to write to temp input file: %v", err)
 	}
 	tmpInputFile.Close()
 
-	tmpOutputDir, err := os.MkdirTemp("", "test_output_dir_")
+	tmpOutputDir, err := os.MkdirTemp("", "test_ffmpeg_output_dir_")
 	if err != nil {
 		t.Fatalf("Failed to create temp output dir: %v", err)
 	}
 	defer os.RemoveAll(tmpOutputDir)
 	testOutputFile := filepath.Join(tmpOutputDir, "test_out.mp4")
 
-	// Re-add os.Exit mock
-	origExit := osExit
-	var exitCode int
-	osExit = func(code int) {
-		exitCode = code
-		panic(fmt.Sprintf("os.Exit called with %d", code)) // Uses fmt
-	}
-	defer func() { osExit = origExit }()
-
-	// Stdout/Stderr capture removed for this simplified test run
-	// oldStdout := os.Stdout
-	// rOut, wOut, _ := os.Pipe()
-	// os.Stdout = wOut
-	// defer func() { os.Stdout = oldStdout }()
-	// oldStderr := os.Stderr
-	// rErr, wErr, _ := os.Pipe()
-	// os.Stderr = wErr
-	// defer func() { os.Stderr = oldStderr }()
-
-	os.Args = []string{
+	args := []string{
 		"qrvidencode",
-		"-inputFile", tmpInputFile.Name(),
-		"-outputFile", testOutputFile,
-		"-chunkSize", "2",
-		"-qrSize", "64",
-		"-resolution", "64x64",
+		"--out", testOutputFile,
+		"--chunkSize", "5",
+		"--qrSize", "128",
+		tmpInputFile.Name(),
 	}
 
-	mainFinished := make(chan bool)
-	go func() {
-		// t.Log("TestMainExecutionFlow_NoFFmpeg (goroutine): Starting") // This log worked
-		defer func() {
-			fmt.Println("GOROUTINE DEFER: Defer function running") // Raw print
-			if r := recover(); r != nil {
-				fmt.Printf("GOROUTINE DEFER: Recovered from panic: %v\n", r) // Raw print
+	var ffmpegPathForTest string
+	var appShouldFindFFmpeg bool
+
+	pathFromLookPath, errLookPath := exec.LookPath("ffmpeg")
+	if errLookPath == nil {
+		ffmpegPathForTest = pathFromLookPath
+		appShouldFindFFmpeg = true
+	} else {
+		hardcodedPath := "/usr/bin/ffmpeg"
+		info, errStat := os.Stat(hardcodedPath)
+		if errStat == nil && !info.IsDir() && (info.Mode()&0111 != 0) {
+			ffmpegPathForTest = hardcodedPath
+			appShouldFindFFmpeg = true
+		} else {
+			appShouldFindFFmpeg = false
+		}
+	}
+
+	t.Logf("Test environment check: appShouldFindFFmpeg: %v, path: %q", appShouldFindFFmpeg, ffmpegPathForTest)
+
+	err = runEncoderApp(args)
+
+	if appShouldFindFFmpeg {
+		if err != nil {
+			t.Errorf("runEncoderApp failed unexpectedly (ffmpeg was expected to be found and run by app): %v", err)
+		} else {
+			if _, statErr := os.Stat(testOutputFile); os.IsNotExist(statErr) {
+				t.Errorf("Output video file %s was not created, even though runEncoderApp reported success.", testOutputFile)
 			} else {
-				fmt.Println("GOROUTINE DEFER: No panic recovered.")
+				t.Logf("runEncoderApp completed successfully, output video created at %s", testOutputFile)
 			}
-			close(mainFinished)
-		}()
-		main()
-		// If main calls os.Exit (which panics), this line won't be reached.
-		// fmt.Println("GOROUTINE: main() completed without os.Exit mock panic")
-	}()
-
-	<-mainFinished
-	t.Logf("TestMainExecutionFlow_NoFFmpeg: mainFinished. Captured exitCode: %d", exitCode)
-
-	// Basic check: was os.Exit called? (Typically expect 1 due to ffmpeg not found)
-	if exitCode == 0 {
-		// This might happen if ffmpeg *was* found and ran successfully.
-		// For a "NoFFmpeg" test, we usually expect an error path.
-		// If this occurs, the ffmpeg checks later will determine if it was a true success or unexpected.
-		t.Log("TestMainExecutionFlow_NoFFmpeg: os.Exit was not called (exitCode is 0). This might be ok if ffmpeg ran successfully.")
-	} else if exitCode != 1 {
-        // If ffmpeg is not found, main() should call os.Exit(1).
-        // If other errors occur before ffmpeg, they might also os.Exit(1).
-        // os.Exit(2) is usually for flag parsing errors.
-        // For this test, expecting 1 if ffmpeg is missing or errors.
-		// t.Errorf("Expected exitCode 1 (e.g. ffmpeg not found), got %d", exitCode)
-        // Let's make this a t.Log for now, as the specific exit path can vary.
-        t.Logf("TestMainExecutionFlow_NoFFmpeg: main exited with code %d.", exitCode)
-    }
-
-
-	// Since stdout/stderr are not captured, we can't check their content here.
-	// We can only check if os.Exit was called with an expected code.
-	// Further checks on file creation (if ffmpeg was mocked to succeed) are also not possible here.
-	t.Log("TestMainExecutionFlow_NoFFmpeg: Finished test (simplified without stdout/stderr check)")
-}
-
-var osExit = os.Exit
-
-func TestMain(m *testing.M) {
-	originalOsExit := osExit
-	code := m.Run()
-	osExit = originalOsExit
-	os.Exit(code)
+		}
+	} else {
+		if err == nil {
+			t.Error("runEncoderApp succeeded but an error was expected because ffmpeg should not be found by its logic.")
+		} else if !strings.Contains(err.Error(), "ffmpeg not found") && !strings.Contains(err.Error(), "executable file not found") {
+			t.Errorf("runEncoderApp returned an unexpected error when ffmpeg was not expected to be found: %v", err)
+		} else {
+			t.Logf("runEncoderApp correctly returned an error related to ffmpeg not being found: %v", err)
+		}
+	}
 }

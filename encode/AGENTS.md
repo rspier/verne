@@ -4,14 +4,11 @@ This document provides guidance for AI agents working on the `qrvidencode` Go pr
 
 ### 1. Core Logic
 
--   **File Input & Chunking**: The program reads an arbitrary input file (`-inputFile`) and splits it into byte chunks based on `-chunkSize`. This `chunkSize` refers to the original data portion.
--   **Metadata Prepending**: Before QR code generation, each original data chunk is prepended with:
-    1.  An 8-byte XXH64 checksum (BigEndian).
-    2.  A 4-byte sequence number (uint32, 0-indexed, BigEndian).
-    The checksum is calculated over `[sequence_number_bytes][original_data_chunk_bytes]`.
-    The final payload for the QR code is `[checksum_bytes][sequence_number_bytes][original_data_chunk_bytes]`.
--   **QR Code Generation**: This final payload (original data + 12 bytes of metadata) is converted into a QR code image (PNG) using `github.com/skip2/go-qrcode`. Parameters like error correction level (`-qrLevel`) and image pixel size (`-qrSize`) are configurable. The library handles the quiet zone automatically.
--   **Video Encoding**: The generated QR code PNG images are stored temporarily on disk. The `ffmpeg` command-line tool is then invoked via `os/exec` to compile these images into a video file (`-outputFile`). Video parameters like frames per second (`-fps`), duration each QR code is shown (`-framesPerQR`), and video resolution (`-resolution`) are configurable.
+-   **File Input & Chunking**: The program reads an input file path as a **positional argument**. It splits the file's data into byte chunks based on `--chunkSize`. This `chunkSize` refers to the original data portion.
+-   **Metadata Prepending**: Before QR code generation, each original data chunk is prepended with a `ChunkHeader` (16 bytes: Checksum uint64, SequenceNum uint32, DataLength uint32) serialized using `encoding/binary` (BigEndian). The checksum covers `SequenceNum`, `DataLength`, and the `OriginalData`.
+-   **Hex Encoding**: The binary payload (`ChunkHeader` + `OriginalData`) is hex-encoded into a string.
+-   **QR Code Generation**: This hex string is converted into a QR code image (PNG) using `github.com/boombuler/barcode/qr`. The QR error correction level defaults to Medium (`qr.M`). Image pixel size is configurable via `--qrSize`.
+-   **Video Encoding**: The generated QR code PNG images are stored temporarily on disk. The `ffmpeg` command-line tool is then invoked via `os/exec` to compile these images into a video file (specified by `--out`). Video parameters like frames per second (`--fps`), duration each QR code is shown (`--framesPerQR`), and video resolution (`--resolution`) are configurable.
 -   **Temporary Files**: A temporary directory is created to store intermediate QR code PNG files. This directory should be cleaned up using `defer os.RemoveAll(tempDir)`.
 
 ### 2. Dependencies

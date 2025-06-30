@@ -64,17 +64,17 @@ func findFFmpegForTest(t *testing.T) (string, bool) {
 
 // 3. Encode the sample file using `qrvidencoder_test_util`.
 //    The `-chunkSize` now refers to the size of the original data payload per QR code.
-//    The actual data encoded in each QR will be `chunkSize + 8 (checksum) + 4 (sequence number)` bytes.
-//    Ensure your QR parameters (size, recovery level) can accommodate this.
+//    The actual data encoded in each QR will be `chunkSize + 16 (header)` bytes, then hex-encoded.
+//    Usage: ./qrvidencoder_test_util <input_file> --out <output_video> [options]
 //    ```bash
-//    ./qrvidencoder_test_util -inputFile sample_input.txt -outputFile test_video.mp4 -chunkSize 20 -qrLevel M -qrSize 256 -fps 1 -framesPerQR 1
+//    ./qrvidencoder_test_util sample_input.txt --out test_video.mp4 --chunkSize 20 --qrSize 256 --fps 1 --framesPerQR 1
 //    ```
-//    (Adjust parameters as needed for different test cases, e.g., higher framesPerQR, different chunkSize)
-//    If you use a very small `chunkSize`, the metadata overhead (12 bytes) will be significant.
+//    (Adjust parameters as needed for different test cases)
 
 // 4. Decode the video using `qrviddecoder_test_util`.
+//    Usage: ./qrviddecoder_test_util <input_video> --out <output_data> [options]
 //    ```bash
-//    ./qrviddecoder_test_util -inputFile test_video.mp4 -outputFile decoded_output.txt
+//    ./qrviddecoder_test_util test_video.mp4 --out decoded_output.txt
 //    ```
 
 // 5. Compare the original and decoded files.
@@ -198,15 +198,15 @@ func TestEndToEnd_EncodeDecode(t *testing.T) {
 	// Use small, fast parameters for testing
 	// Chunk size needs to be small enough that metadata isn't overwhelming, but not too small.
 	// Metadata is 12 bytes (8 checksum + 4 seq). If data is 20 bytes, total is 32.
+	// Encoder: [flags] <input_file>
 	encodeCmd := exec.Command(encoderExePath,
-		"-inputFile", sampleInputFile,
-		"-outputFile", videoFile,
-		"-chunkSize", "20", // Small chunk size for testing
-		// "-qrLevel", "L", // Removed as encoder uses default qr.M for now
-		"-qrSize", "256",   // Default size
+		"--out", videoFile,
+		"--chunkSize", "20", // Small chunk size for testing
+		"--qrSize", "256",   // Default size
 		"-fps", "1",
 		"-framesPerQR", "1",
 		"-resolution", "256x256",
+		sampleInputFile, // Positional argument now at the end
 	)
 	encodeOutput, err := encodeCmd.CombinedOutput()
 	if err != nil {
@@ -216,9 +216,11 @@ func TestEndToEnd_EncodeDecode(t *testing.T) {
 
 
 	// 6. Run Decoder
+	// Decoder: [flags] <input_video>
 	decodeCmd := exec.Command(decoderExePath,
-		"-inputFile", videoFile,
-		"-outputFile", decodedOutputFile,
+		// No other flags defined for decoder in test, but if they were, they'd go here
+		"--out", decodedOutputFile,
+		videoFile, // Positional argument now at the end
 	)
 	decodeOutput, err := decodeCmd.CombinedOutput()
 	if err != nil {
