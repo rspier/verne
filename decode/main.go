@@ -37,6 +37,28 @@ var (
 	maxFramesToProcess int
 )
 
+// findFFmpegExecutable attempts to find ffmpeg, first in PATH, then in common hardcoded locations.
+func findFFmpegExecutable() (string, error) {
+	// 1. Try PATH
+	path, err := exec.LookPath("ffmpeg")
+	if err == nil {
+		return path, nil
+	}
+
+	// 2. Try common hardcoded paths
+	commonPaths := []string{"/usr/bin/ffmpeg"} // Add more if needed, e.g., "/usr/local/bin/ffmpeg"
+	for _, p := range commonPaths {
+		info, err := os.Stat(p)
+		if err == nil {
+			// Check if it's a regular file and executable
+			if !info.IsDir() && (info.Mode()&0111 != 0) { // Check if executable by user/group/other
+				return p, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("ffmpeg not found in PATH or common locations (%s): %w", strings.Join(commonPaths, ", "), err) // return original LookPath error
+}
+
 func main() {
 	flag.StringVar(&inputFile, "inputFile", "", "Path to the input video file (required)")
 	flag.StringVar(&outputFile, "outputFile", "", "Path to the output file for decoded data (required)")
@@ -45,6 +67,14 @@ func main() {
 	flag.IntVar(&maxFramesToProcess, "maxFramesToProcess", 0, "Maximum number of frames to process after skipping (0 for all)")
 
 	flag.Parse()
+
+	ffmpegPath, err := findFFmpegExecutable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error finding ffmpeg: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Please ensure ffmpeg is installed and in your PATH, or accessible at /usr/bin/ffmpeg.")
+		os.Exit(1)
+	}
+	fmt.Printf("Using ffmpeg executable at: %s\n", ffmpegPath)
 
 	if inputFile == "" || outputFile == "" {
 		fmt.Fprintln(os.Stderr, "Error: -inputFile and -outputFile are required.")
@@ -106,8 +136,8 @@ func main() {
 
 	ffmpegArgs = append(ffmpegArgs, filepath.Join(tempDir, "frame_%06d.png"))
 
-	cmd := exec.Command("ffmpeg", ffmpegArgs...)
-	fmt.Printf("Executing ffmpeg command: ffmpeg %s\n", strings.Join(cmd.Args, " ")) // Use cmd.Args for safety
+	cmd := exec.Command(ffmpegPath, ffmpegArgs...) // Use found ffmpegPath
+	fmt.Printf("Executing ffmpeg command: %s %s\n", ffmpegPath, strings.Join(cmd.Args, " "))
 
 	outputBytes, err := cmd.CombinedOutput()
 	if err != nil {

@@ -10,6 +10,34 @@ import (
 	"testing"
 )
 
+// Helper function for tests to find ffmpeg, similar to main packages
+// This avoids needing to export findFFmpegExecutable from main packages just for tests,
+// or creating a shared util package for just one function used by tests and main.
+func findFFmpegForTest(t *testing.T) (string, bool) {
+	path, err := exec.LookPath("ffmpeg")
+	if err == nil {
+		t.Logf("findFFmpegForTest: Found ffmpeg in PATH: %s", path)
+		return path, true
+	}
+	t.Logf("findFFmpegForTest: ffmpeg not found in PATH: %v", err)
+
+	// Check common hardcoded path
+	hardcodedPath := "/usr/bin/ffmpeg"
+	info, errStat := os.Stat(hardcodedPath)
+	if errStat == nil {
+		if !info.IsDir() && (info.Mode()&0111 != 0) {
+			t.Logf("findFFmpegForTest: Found ffmpeg at hardcoded path: %s", hardcodedPath)
+			return hardcodedPath, true
+		}
+		t.Logf("findFFmpegForTest: Found %s, but it's not an executable file.", hardcodedPath)
+	} else {
+		t.Logf("findFFmpegForTest: Did not find ffmpeg at %s: %v", hardcodedPath, errStat)
+	}
+
+	return "", false
+}
+
+
 // Note: True automated end-to-end testing for this application is complex as it
 // requires:
 // 1. The `qrvidencode` program to be built and available.
@@ -102,10 +130,12 @@ func TestDummy(t *testing.T) {
 // For now, the E2E guidance is the most practical.
 
 func TestEndToEnd_EncodeDecode(t *testing.T) {
-	_, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not found in PATH, skipping end-to-end test")
+	ffmpegPath, found := findFFmpegForTest(t)
+	if !found {
+		// Message already logged by findFFmpegForTest
+		t.Skip("ffmpeg not found in PATH or at /usr/bin/ffmpeg, skipping end-to-end test")
 	}
+	t.Logf("Using ffmpeg for E2E test: %s", ffmpegPath) // ffmpegPath is not directly used by test, but by compiled binaries
 
 	// 1. Create temporary directory for all test artifacts
 	testDir, err := os.MkdirTemp("", "qrvid_e2e_test_")
