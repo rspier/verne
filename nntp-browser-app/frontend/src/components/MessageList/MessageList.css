@@ -1,0 +1,81 @@
+.message-list-container {
+  font-family: sans-serif;
+  padding: 20px;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.message-list-container h2 {
+  text-align: center;
+  color: #333;
+  margin-bottom: 10px;
+}
+
+.back-link {
+  display: inline-block;
+  margin-bottom: 20px;
+  color: #007bff;
+  text-decoration: none;
+}
+
+.back-link:hover {
+  text-decoration: underline;
+}
+
+.message-list {
+  list-style: none;
+  padding: 0;
+}
+
+.message-list-item {
+  background-color: #fff;
+  border: 1px solid #e0e0e0;
+  margin-bottom: 8px;
+  border-radius: 4px;
+  transition: box-shadow 0.2s ease-in-out;
+}
+
+.message-list-item:hover {
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+.message-list-item a {
+  display: block;
+  padding: 12px 15px;
+  text-decoration: none;
+  color: inherit; /* Take color from parent */
+}
+
+.message-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 5px;
+}
+
+.message-subject {
+  font-weight: bold;
+  color: #0056b3; /* Slightly different blue for subject */
+  font-size: 1.05em;
+}
+
+.message-from {
+  font-size: 0.85em;
+  color: #666;
+}
+
+.message-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8em;
+  color: #777;
+}
+
+.message-date {}
+
+.message-thread-count {}
+
+p {
+  text-align: center;
+}
