@@ -1,0 +1,22 @@
+{
+  "name": "webdecode",
+  "version": "1.0.0",
+  "description": "Web-based QR video decoder",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "keywords": [
+    "qr",
+    "video",
+    "decoder"
+  ],
+  "author": "Jules",
+  "license": "ISC",
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  },
+  "dependencies": {}
+}
