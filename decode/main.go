@@ -13,21 +13,26 @@ import (
 	_ "image/png" // Needed for image.Decode to recognize PNGs
 	"sort"
 	"encoding/binary" // For parsing sequence number and checksum
+	"encoding/hex"    // For hex decoding
 	"bytes"           // For bytes.Buffer
+	"io"              // For io.ReadFull
 
 	"github.com/cespare/xxhash/v2" // For XXH64 checksum
 	"github.com/makiuchi-d/gozxing"
 	"github.com/makiuchi-d/gozxing/qrcode"
 )
 
-const (
-	// Size of the XXH64 checksum in bytes
-	checksumSize = 8
-	// Size of the sequence number (uint32) in bytes
-	sequenceNumberSize = 4
-	// Total metadata size per chunk
-	metadataHeaderSize = checksumSize + sequenceNumberSize
-)
+// ChunkHeader defines the metadata prepended to each data chunk.
+// Note: The order of fields matters for serialization.
+// This must be identical to the definition in the encoder.
+type ChunkHeader struct {
+	Checksum    uint64 // XXH64 checksum of (SequenceNum (4B) + DataLength (4B) + OriginalData)
+	SequenceNum uint32 // Sequence number of the chunk
+	DataLength  uint32 // Length of the OriginalData part
+}
+
+// Actual size of header when serialized: 8 (Checksum) + 4 (SequenceNum) + 4 (DataLength) = 16 bytes
+const newHeaderSize = 16
 
 var (
 	inputFile         string
@@ -213,59 +218,73 @@ func main() {
 			continue
 		}
 
-		// Use GetRawBytes for more robust handling of binary data
-		rawPayloadBytes := result.GetRawBytes()
-		// GetRawBytes() itself does not return an error in gozxing.
-		// If result is nil or rawBytes are nil, subsequent checks should handle it,
-		// or the decode operation itself would have failed earlier.
+		// Encoder now writes a hex string into the QR code.
+		// Decoder should retrieve this as text.
+		hexStringFromQR := result.GetText()
 
-		// Deduplicate based on the raw byte content of the QR code
-		// Convert to string for map key, as []byte cannot be map keys directly.
-		rawPayloadKey := string(rawPayloadBytes)
-		if _, seen := seenRawPayloads[rawPayloadKey]; seen {
-			// fmt.Printf("Frame %d (%s): Duplicate raw QR payload already processed. Skipping.\n", frameIdx+1, filepath.Base(framePath))
+		// Deduplicate based on the hex string content of the QR code
+		if _, seen := seenRawPayloads[hexStringFromQR]; seen {
+			// fmt.Printf("Frame %d (%s): Duplicate raw QR payload (hex string) already processed. Skipping.\n", frameIdx+1, filepath.Base(framePath))
 			continue
 		}
-		seenRawPayloads[rawPayloadKey] = true // Mark this raw payload as processed.
+		seenRawPayloads[hexStringFromQR] = true // Mark this raw payload as processed.
 
-		if len(rawPayloadBytes) < metadataHeaderSize {
-			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s): QR payload too short (%d bytes) for metadata. Skipping.\n", frameIdx+1, filepath.Base(framePath), len(rawPayloadBytes))
+		// Hex-decode the content
+		rawPayloadBytes, err := hex.DecodeString(hexStringFromQR)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s): Failed to hex-decode QR content: %v. Content: '%s'. Skipping.\n", frameIdx+1, filepath.Base(framePath), err, hexStringFromQR)
 			continue
 		}
 
-		receivedChecksumBytes := rawPayloadBytes[:checksumSize]
-		sequenceNumBytes := rawPayloadBytes[checksumSize : metadataHeaderSize]
-		originalData := rawPayloadBytes[metadataHeaderSize:]
+		if len(rawPayloadBytes) < newHeaderSize {
+			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s): Decoded QR payload too short (%d bytes) for header. Min required: %d. Skipping.\n", frameIdx+1, filepath.Base(framePath), len(rawPayloadBytes), newHeaderSize)
+			continue
+		}
 
-		receivedChecksum := binary.BigEndian.Uint64(receivedChecksumBytes)
-		sequenceNum := binary.BigEndian.Uint32(sequenceNumBytes)
+		reader := bytes.NewReader(rawPayloadBytes)
+		var header ChunkHeader
+		err = binary.Read(reader, binary.BigEndian, &header)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s): Failed to read chunk header: %v. Skipping.\n", frameIdx+1, filepath.Base(framePath), err)
+			continue
+		}
 
-		dataThatWasChecksummed := rawPayloadBytes[checksumSize:] // This is sequenceNumBytes + originalData
-		calculatedDigest := xxhash.Sum64(dataThatWasChecksummed)
+		if reader.Len() < int(header.DataLength) {
+			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s), Seq %d: Payload data length mismatch. Header.DataLength=%d, remaining_payload_bytes=%d. Skipping chunk.\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum, header.DataLength, reader.Len())
+			continue
+		}
 
-		if calculatedDigest != receivedChecksum {
-			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s), Seq %d: Checksum mismatch! Expected %016x, got %016x. Discarding chunk.\n", frameIdx+1, filepath.Base(framePath), sequenceNum, receivedChecksum, calculatedDigest)
+		originalData := make([]byte, header.DataLength)
+		_, err = io.ReadFull(reader, originalData) // Ensure all expected bytes are read
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s), Seq %d: Failed to read original data (expected %d bytes): %v. Skipping.\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum, header.DataLength, err)
+			continue
+		}
+
+		// Verify checksum: Checksum covers SequenceNum (4B) + DataLength (4B) + OriginalData
+		headerForChecksumBytes := make([]byte, 4+4)
+		binary.BigEndian.PutUint32(headerForChecksumBytes[0:4], header.SequenceNum)
+		binary.BigEndian.PutUint32(headerForChecksumBytes[4:8], header.DataLength)
+
+		dataThatWasChecksummed := append(headerForChecksumBytes, originalData...)
+		calculatedChecksum := xxhash.Sum64(dataThatWasChecksummed)
+
+		if calculatedChecksum != header.Checksum {
+			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s), Seq %d: Checksum mismatch! Expected %016x, got %016x. Discarding chunk.\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum, header.Checksum, calculatedChecksum)
 			continue
 		}
 
 		foundAnyValidChunk = true
-		if _, exists := decodedChunks[sequenceNum]; !exists {
-			decodedChunks[sequenceNum] = originalData
-			fmt.Printf("Frame %d (%s): Stored Seq %d, Checksum OK. Data len: %d.\n", frameIdx+1, filepath.Base(framePath), sequenceNum, len(originalData))
-		} else if len(originalData) > len(decodedChunks[sequenceNum]) {
-			// Basic heuristic: if we see the same sequence number again and the data is longer,
-			// maybe the previous one was truncated? This is unlikely with good QR codes
-			// but could be a fallback. Or simply prefer first-seen. For now, prefer first.
-			// To prefer first, this 'else if' block could be removed.
-			// For now, let's just log if we see it again and it's different.
-			// If we decide to overwrite, we should log that too.
-			// Current logic: first one wins.
-			fmt.Printf("Frame %d (%s): Seq %d (Checksum OK) already stored. Ignoring duplicate.\n", frameIdx+1, filepath.Base(framePath), sequenceNum)
+		if _, exists := decodedChunks[header.SequenceNum]; !exists {
+			decodedChunks[header.SequenceNum] = originalData
+			fmt.Printf("Frame %d (%s): Stored Seq %d, Checksum OK. Data len: %d.\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum, len(originalData))
+		} else {
+			// Data for this sequence number already exists. For now, first one wins.
+			fmt.Printf("Frame %d (%s): Seq %d (Checksum OK) already stored. Ignoring duplicate.\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum)
 		}
 
-
-		if sequenceNum > maxSequenceNum {
-			maxSequenceNum = sequenceNum
+		if header.SequenceNum > maxSequenceNum {
+			maxSequenceNum = header.SequenceNum
 		}
 	}
 

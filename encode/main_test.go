@@ -20,7 +20,7 @@ func resetFlags() {
 	inputFile = ""
 	outputFile = "output.mp4"
 	chunkSize = 1024
-	qrLevelFlag = recoveryLevelVar(qrcode.Medium)
+	// qrLevelFlag removed
 	qrSize = 256
 	fps = 1
 	framesPerQR = 1
@@ -69,47 +69,9 @@ func TestParseResolution(t *testing.T) {
 	}
 }
 
-func TestRecoveryLevelVar(t *testing.T) {
-	tests := []struct {
-		name      string
-		value     string
-		wantSet   qrcode.RecoveryLevel
-		wantStr   string
-		expectErr bool
-	}{
-		{"L", "L", qrcode.Low, "L", false},
-		{"M", "M", qrcode.Medium, "M", false},
-		{"Q", "Q", qrcode.Highest, "Q", false},
-		{"H", "H", qrcode.High, "H", false},
-		{"invalid", "X", qrcode.Medium, "", true},
-		{"lowercase l", "l", qrcode.Medium, "", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var rlv recoveryLevelVar
-			if tt.expectErr {
-				rlv = recoveryLevelVar(qrcode.Medium)
-			}
-
-			err := rlv.Set(tt.value)
-			if (err != nil) != tt.expectErr {
-				t.Errorf("recoveryLevelVar.Set(%q) error = %v, wantErr %v", tt.value, err, tt.expectErr)
-				return
-			}
-
-			if !tt.expectErr {
-				if qrcode.RecoveryLevel(rlv) != tt.wantSet {
-					t.Errorf("recoveryLevelVar.Set(%q) resulted in level %v, want %v", tt.value, qrcode.RecoveryLevel(rlv), tt.wantSet)
-				}
-				if rlv.String() != tt.wantStr {
-					t.Errorf("recoveryLevelVar.String() for level %v returned %q, want %q", qrcode.RecoveryLevel(rlv), rlv.String(), tt.wantStr)
-				}
-			}
-		})
-	}
-}
-
+// TestRecoveryLevelVar is removed as the recoveryLevelVar type and associated flag are no longer used.
+// The new QR library boombuler/barcode/qr uses constants like qr.M directly.
+// If a flag for QR level is re-introduced, a new test would be needed.
 
 func TestDataChunking(t *testing.T) {
 	tests := []struct {

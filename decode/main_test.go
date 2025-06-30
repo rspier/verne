@@ -202,7 +202,7 @@ func TestEndToEnd_EncodeDecode(t *testing.T) {
 		"-inputFile", sampleInputFile,
 		"-outputFile", videoFile,
 		"-chunkSize", "20", // Small chunk size for testing
-		"-qrLevel", "L",    // Low recovery for speed, assuming clear frames
+		// "-qrLevel", "L", // Removed as encoder uses default qr.M for now
 		"-qrSize", "256",   // Default size
 		"-fps", "1",
 		"-framesPerQR", "1",

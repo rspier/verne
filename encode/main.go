@@ -8,60 +8,37 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"bytes"           // For bytes.Buffer
 	"encoding/binary" // For converting sequence number to bytes
+	"encoding/hex"    // For hex encoding the payload
+	"image/png"       // For saving QR code as PNG
 
+	"github.com/boombuler/barcode"
+	"github.com/boombuler/barcode/qr"
 	"github.com/cespare/xxhash/v2" // For XXH64 checksum
-	qrcode "github.com/skip2/go-qrcode"
 )
 
-const (
-	// Size of the XXH64 checksum in bytes
-	checksumSize = 8
-	// Size of the sequence number (uint32) in bytes
-	sequenceNumberSize = 4
-	// Total metadata size per chunk
-	metadataHeaderSize = checksumSize + sequenceNumberSize
-)
-
-// Enum for QR Code recovery level
-type recoveryLevelVar qrcode.RecoveryLevel
-
-func (r *recoveryLevelVar) String() string {
-	switch qrcode.RecoveryLevel(*r) {
-	case qrcode.Low:
-		return "L"
-	case qrcode.Medium:
-		return "M"
-	case qrcode.High:
-		return "H"
-	case qrcode.Highest:
-		return "Q" // Note: library uses Highest for Q
-	}
-	return "M" // Default
+// ChunkHeader defines the metadata prepended to each data chunk.
+// Note: The order of fields matters for serialization.
+type ChunkHeader struct {
+	Checksum    uint64 // XXH64 checksum of (SequenceNum (4B) + DataLength (4B) + OriginalData)
+	SequenceNum uint32 // Sequence number of the chunk
+	DataLength  uint32 // Length of the OriginalData part
 }
 
-func (r *recoveryLevelVar) Set(value string) error {
-	switch value {
-	case "L":
-		*r = recoveryLevelVar(qrcode.Low)
-	case "M":
-		*r = recoveryLevelVar(qrcode.Medium)
-	case "H":
-		*r = recoveryLevelVar(qrcode.High)
-	case "Q":
-		*r = recoveryLevelVar(qrcode.Highest)
-	default:
-		return fmt.Errorf("invalid QR recovery level: %s. Must be one of L, M, Q, H", value)
-	}
-	return nil
-}
+// Recalculate static header size based on ChunkHeader struct using binary.Size
+// We can't do this at package level easily without an instance.
+// For now, let's define it manually, or calculate in main.
+// Actual size of header when serialized: 8 (Checksum) + 4 (SequenceNum) + 4 (DataLength) = 16 bytes
+const newHeaderSize = 16
+
+// Note: qrLevelFlag and related types are removed as boombuler/barcode/qr uses constants like qr.M directly.
+// We will use qr.M as a default for now. A new flag can be added later if customization is needed.
 
 var (
 	inputFile   string
 	outputFile  string
 	chunkSize   int
-	// qrQuietZone int // Removed as library handles quiet zone automatically
-	qrLevelFlag recoveryLevelVar = recoveryLevelVar(qrcode.Medium) // Default
 	qrSize      int
 	fps         int
 	framesPerQR int
@@ -95,10 +72,9 @@ func findFFmpegExecutable() (string, error) {
 func main() {
 	flag.StringVar(&inputFile, "inputFile", "", "Path to the input file (required)")
 	flag.StringVar(&outputFile, "outputFile", "output.mp4", "Path to the output video file")
-	flag.IntVar(&chunkSize, "chunkSize", 1024, "Size of data chunks in bytes")
-	// flag.IntVar(&qrQuietZone, "qrQuietZone", 4, "QR code quiet zone") // Removed
-	flag.Var(&qrLevelFlag, "qrLevel", "QR code recovery level (L, M, Q, H)")
-	flag.IntVar(&qrSize, "qrSize", 256, "QR code image size in pixels")
+	flag.IntVar(&chunkSize, "chunkSize", 1024, "Size of original data chunks in bytes (metadata will be added)")
+	// qrLevel flag removed for now, using default qr.M. Can be re-added if needed.
+	flag.IntVar(&qrSize, "qrSize", 256, "QR code image size in pixels (width and height)")
 	flag.IntVar(&fps, "fps", 1, "Frames per second for the output video")
 	flag.IntVar(&framesPerQR, "framesPerQR", 1, "Number of video frames each QR code is displayed for")
 	flag.StringVar(&resolution, "resolution", "256x256", "Video resolution (e.g., \"1920x1080\")")
@@ -120,15 +96,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Map qrLevelFlag to the library's type
-	qrRecoveryLevel := qrcode.RecoveryLevel(qrLevelFlag)
+	// qrRecoveryLevel := qr.M // Defaulting to Medium. Add flag if needed.
 
 	fmt.Println("QR Code Video Encoder")
 	fmt.Printf("Input File: %s\n", inputFile)
 	fmt.Printf("Output File: %s\n", outputFile)
-	fmt.Printf("Chunk Size: %d bytes\n", chunkSize)
-	// fmt.Printf("QR Quiet Zone: %d\n", qrQuietZone) // Removed
-	fmt.Printf("QR Recovery Level: %s\n", qrLevelFlag.String()) // Use the String() method for display
+	fmt.Printf("Chunk Size (original data part): %d bytes\n", chunkSize)
+	fmt.Printf("QR Error Correction Level: M (default)\n") // Placeholder
 	fmt.Printf("QR Size: %dpx\n", qrSize)
 	fmt.Printf("FPS: %d\n", fps)
 	fmt.Printf("Frames per QR: %d\n", framesPerQR)
@@ -170,47 +144,70 @@ func main() {
 
 	// Generate and save QR code images
 	imageFilePaths := []string{}
-	for i, originalChunk := range chunks {
-		sequenceNum := uint32(i) // Using 0-based indexing for sequence number
-
-		// Prepare sequence number bytes (BigEndian)
-		seqNumBytes := make([]byte, sequenceNumberSize)
-		binary.BigEndian.PutUint32(seqNumBytes, sequenceNum)
-
-		// Data to be checksummed: sequence number + original data chunk
-		dataToChecksum := append(seqNumBytes, originalChunk...)
-
-		// Calculate XXH64 checksum
-		digest := xxhash.Sum64(dataToChecksum)
-		checksumBytes := make([]byte, checksumSize)
-		binary.BigEndian.PutUint64(checksumBytes, digest)
-
-		// Final payload for QR code: checksum + sequence number + original data
-		finalPayload := append(checksumBytes, dataToChecksum...)
-
-		if len(finalPayload) > qrSize*qrSize { // A very rough check, actual QR capacity is complex
-			fmt.Fprintf(os.Stderr, "Warning: payload size for chunk %d (%d bytes) might be too large for QR code parameters. QR Capacity depends on version and error correction level.\n", i, len(finalPayload))
+	for i, originalChunkData := range chunks {
+		header := ChunkHeader{
+			SequenceNum: uint32(i),
+			DataLength:  uint32(len(originalChunkData)),
 		}
 
-		// Generate QR code for this finalPayload
-		// Note: The QR code library expects a string. For binary data, this is okay
-		// as long as the decoder interprets it as bytes.
-		qr, err := qrcode.New(string(finalPayload), qrRecoveryLevel)
+		// Prepare data for checksum: SequenceNum (4B) + DataLength (4B) + OriginalData
+		// Max size for this part of header is 4+4 = 8 bytes
+		headerForChecksumBytes := make([]byte, 4+4)
+		binary.BigEndian.PutUint32(headerForChecksumBytes[0:4], header.SequenceNum)
+		binary.BigEndian.PutUint32(headerForChecksumBytes[4:8], header.DataLength)
+
+		dataToChecksum := append(headerForChecksumBytes, originalChunkData...)
+		header.Checksum = xxhash.Sum64(dataToChecksum)
+
+		// Prepare final QR payload: Full Header (16B) + OriginalData
+		qrPayloadBuffer := new(bytes.Buffer)
+		err := binary.Write(qrPayloadBuffer, binary.BigEndian, &header)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error generating QR code for chunk %d (seq %d): %v\n", i, sequenceNum, err)
+			fmt.Fprintf(os.Stderr, "Error writing header to buffer for chunk %d (seq %d): %v\n", i, header.SequenceNum, err)
 			continue
 		}
-		qr.DisableBorder = false // Ensure the standard border/quiet zone is active.
+		qrPayloadBuffer.Write(originalChunkData)
+		finalPayloadBytes := qrPayloadBuffer.Bytes()
+
+		// Note: boombuler/barcode/qr.Encode takes []byte directly for qr.Byte mode (auto-selected for []byte)
+		// or a string. Forcing byte mode is best for binary.
+		// The library will choose an appropriate QR code version automatically.
+		// Hex-encode the binary payload to ensure it's compatible with QR string input,
+		// even if the library has quirks with binary strings in byte mode.
+		hexPayload := hex.EncodeToString(finalPayloadBytes)
+
+		// Using qr.M for medium error correction.
+		// qr.Auto should select Alphanumeric or Byte mode for a hex string.
+		qrCode, err := qr.Encode(hexPayload, qr.M, qr.Auto)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error generating QR code for chunk %d (seq %d): %v\n", i, header.SequenceNum, err)
+			continue
+		}
+
+		// Scale the barcode to the desired size
+		scaledQrCode, err := barcode.Scale(qrCode, qrSize, qrSize)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error scaling QR code for chunk %d (seq %d): %v\n", i, header.SequenceNum, err)
+			continue
+		}
 
 		// Save QR code as a PNG file
 		frameFileName := filepath.Join(tempDir, fmt.Sprintf("qr_frame_%04d.png", i))
-		err = qr.WriteFile(qrSize, frameFileName)
+		file, err := os.Create(frameFileName)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing QR code PNG for chunk %d (seq %d) to %s: %v\n", i, sequenceNum, frameFileName, err)
+			fmt.Fprintf(os.Stderr, "Error creating PNG file for chunk %d (seq %d): %v\n", i, header.SequenceNum, err)
 			continue
 		}
+		err = png.Encode(file, scaledQrCode)
+		file.Close() // Close the file even if png.Encode fails, though it might be a bit late.
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing QR code PNG for chunk %d (seq %d) to %s: %v\n", i, header.SequenceNum, frameFileName, err)
+			continue
+		}
+
 		imageFilePaths = append(imageFilePaths, frameFileName)
-		fmt.Printf("Generated QR code for chunk %d (seq %d), payload size %d bytes: %s\n", i, sequenceNum, len(finalPayload), frameFileName)
+		// Log the size of the hexPayload string, as that's what's passed to qr.Encode
+		fmt.Printf("Generated QR code for chunk %d (seq %d), hex payload size %d chars: %s\n", i, header.SequenceNum, len(hexPayload), frameFileName)
 	}
 
 	if len(imageFilePaths) == 0 {
