@@ -83,18 +83,31 @@ function updateStatus(message: string, isError: boolean = false) {
  * Initializes the XXHash module.
  */
 async function initXxhash() {
+    if (startBtn) startBtn.disabled = true; // Disable start button during init
+    updateStatus('Initializing XXHash64 module...');
     try {
-        // xxhash-wasm loads `xxhash` onto the global scope (window)
-        // Or it might be `window.xxhash`. Let's assume `xxhash` is directly available.
-        if (typeof xxhash !== 'function') {
-            updateStatus('xxhash library not found. Please ensure it is loaded.', true);
-            throw new Error('xxhash library not found.');
+        // Check for the global xxhash function provided by the UMD script
+        // Accessing through window for explicit global scope.
+        if (typeof (window as any).xxhash !== 'function') {
+            updateStatus('xxhash global function not found. Please ensure the library is loaded correctly from CDN.', true);
+            throw new Error('xxhash global function not found.');
         }
-        const { XXH64 } = await xxhash(); // Initialize and get the XXH64 class/factory
-        h64 = XXH64; // Store the factory or an instance if needed
-        updateStatus('XXHash64 module initialized.');
-    } catch (error) {
-        updateStatus(`Error initializing XXHash64: ${error}`, true);
+
+        updateStatus('xxhash global function found, attempting to initialize WASM...');
+        const xxhashModule = await (window as any).xxhash(); // Initialize and get the module object
+
+        if (!xxhashModule || typeof xxhashModule.XXH64 !== 'function') {
+            updateStatus('XXH64 factory not found in the resolved xxhash module.', true);
+            console.log('Resolved xxhash module:', xxhashModule);
+            throw new Error('XXH64 factory not found in xxhash module.');
+        }
+
+        h64 = xxhashModule.XXH64; // Store the XXH64 factory
+        updateStatus('XXHash64 module initialized successfully.');
+        if (startBtn) startBtn.disabled = false; // Enable start button
+    } catch (error: any) {
+        updateStatus(`Error initializing XXHash64: ${error.message || error}`, true);
+        if (startBtn) startBtn.disabled = true; // Keep it disabled if init fails
     }
 }
 
@@ -107,10 +120,11 @@ if (!videoElement || !canvasElement || !startBtn || !stopBtn || !statusOutput ||
     // Depending on severity, might want to throw an error or disable functionality
 } else {
     // Initial setup
+    startBtn.disabled = true; // Start button is disabled until XXHash is ready
     stopBtn.disabled = true;
     downloadLink.style.display = 'none';
 
-    // Initialize XXHash
+    // Initialize XXHash - this will attempt to enable startBtn upon success
     initXxhash();
 
     startBtn.addEventListener('click', startCapture);
