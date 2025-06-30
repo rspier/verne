@@ -350,19 +350,33 @@ function processFrame() {
                 updateReceivedSequenceDisplay();
 
                 // Final chunk detection logic
-                if (totalChunksExpected === -1 && dataLength < presumedEncoderChunkSize) {
-                    totalChunksExpected = sequenceNum + 1;
-                    updateStatus(`Potential final chunk ${sequenceNum} detected (size ${dataLength} < ${presumedEncoderChunkSize}). Expecting ${totalChunksExpected} total chunks.`, false);
-                    updateReceivedSequenceDisplay(); // Update display again with new total expected
-                } else if (totalChunksExpected !== -1 && sequenceNum >= totalChunksExpected) {
-                    updateStatus(`Warning: Chunk ${sequenceNum} received, which is >= total expected chunks (${totalChunksExpected}). Possible misdetection or stream error.`, true);
-                } else if (totalChunksExpected !== -1 && dataLength === presumedEncoderChunkSize && sequenceNum === totalChunksExpected -1) {
-                    // This case means the "last" chunk (according to previously detected short chunk) is actually full size.
-                    // This implies the short chunk wasn't the end, or file size is exact multiple.
-                    // For now, we will trust the totalChunksExpected derived from the *first* short chunk.
-                    // More complex logic could reset totalChunksExpected if a later, shorter chunk appears.
+                if (totalChunksExpected !== -1 && sequenceNum >= totalChunksExpected) {
+                    // A chunk arrived that is beyond our previously determined total.
+                    // This means the previous 'short chunk' was not the true final chunk.
+                    updateStatus(`Info: Chunk ${sequenceNum} received after a presumed final chunk. Resetting total expected chunks.`, false);
+                    totalChunksExpected = -1; // Reset, as our previous assumption was wrong.
+                    // The 'Safe to stop' message color might need resetting if it was green
+                    if (statusOutput && statusOutput.style.color === 'green') {
+                        statusOutput.style.color = 'black'; // Reset to default
+                        // The main status message will be updated by subsequent updateStatus calls or by updateReceivedSequenceDisplay
+                    }
                 }
 
+                if (totalChunksExpected === -1 && dataLength < presumedEncoderChunkSize) {
+                    // This is now the current best candidate for the final chunk.
+                    totalChunksExpected = sequenceNum + 1;
+                    updateStatus(`Potential final chunk ${sequenceNum} detected (size ${dataLength} < ${presumedEncoderChunkSize}). Expecting ${totalChunksExpected} total chunks.`, false);
+                } else if (totalChunksExpected !== -1 && dataLength < presumedEncoderChunkSize && (sequenceNum + 1) < totalChunksExpected) {
+                    // A new shorter chunk arrived, and it implies an even smaller total number of chunks.
+                    // This is unusual but could happen with extreme out-of-order. Update to the smaller total.
+                     updateStatus(`Info: A new, earlier short chunk ${sequenceNum} detected. Updating total expected from ${totalChunksExpected} to ${sequenceNum + 1}.`, false);
+                    totalChunksExpected = sequenceNum + 1;
+                }
+                // Note: A full-sized chunk arriving as sequenceNum === totalChunksExpected - 1
+                // when totalChunksExpected was set by a short chunk is fine.
+                // It just means the file size was an exact multiple of chunkSize before that short one.
+
+                updateReceivedSequenceDisplay(); // Update display with potentially new total expected or reset state
 
             } else {
                 // updateStatus(`Duplicate chunk ${sequenceNum} received.`, false);
