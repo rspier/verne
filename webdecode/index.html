@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Decoder</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <h1>Web Decoder</h1>
+    <div id="controls">
+        <button id="startBtn">Start Capture</button>
+        <button id="stopBtn" disabled>Stop Capture</button>
+    </div>
+    <div id="captureContainer">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="canvas" style="display:none;"></canvas>
+    </div>
+    <div id="outputContainer">
+        <h2>Decoded Output:</h2>
+        <div id="output"></div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1/dist/jsQR.js"></script>
+    <script src="dist/main.js"></script>
+</body>
+</html>
