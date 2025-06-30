@@ -23,7 +23,8 @@ const FRAME_PROCESS_INTERVAL_MS = 500; // Process a frame every 500ms, adjust as
 // Key: sequence number (number), Value: Uint8Array (original data chunk)
 let collectedChunks: Map<number, Uint8Array> = new Map();
 let highestSequenceNumberSeen = -1;
-let totalChunksExpected = -1; // If we can determine this (e.g., from a special header, or first chunk)
+let totalChunksExpected = -1; // -1 means unknown, otherwise it's N if 0 to N-1 chunks are expected.
+let presumedEncoderChunkSize = 1024; // Default from encode/main.go, can be refined if needed
 
 // To store the initialized XXHash64 instance
 let h64: any = null;
@@ -59,6 +60,45 @@ function bytesToUint32BE(bytes: Uint8Array, offset: number = 0): number {
 function bytesToUint64BE(bytes: Uint8Array, offset: number = 0): BigInt {
     const view = new DataView(bytes.buffer, bytes.byteOffset + offset, 8);
     return view.getBigUint64(0, false); // false for Big Endian
+}
+
+function updateReceivedSequenceDisplay() {
+    if (!progressOverview) return;
+
+    const receivedCount = collectedChunks.size;
+    let statusText = `Collected ${receivedCount} unique chunks. `;
+    statusText += `Highest seq seen: ${highestSequenceNumberSeen}. `;
+
+    if (totalChunksExpected !== -1) {
+        statusText += `Expected total: ${totalChunksExpected}. `;
+        const missing = totalChunksExpected - receivedCount;
+        statusText += missing > 0 ? `${missing} missing.` : `All expected chunks received!`;
+    } else {
+        statusText += `Total expected: Unknown.`;
+    }
+
+    // Display ranges of received chunks
+    if (receivedCount > 0) {
+        const sortedKeys = Array.from(collectedChunks.keys()).sort((a, b) => a - b);
+        let rangesString = " Received sequences: ";
+        let rangeStart = -1;
+        for (let i = 0; i < sortedKeys.length; i++) {
+            const current = sortedKeys[i];
+            if (rangeStart === -1) {
+                rangeStart = current;
+            }
+            if (i + 1 === sortedKeys.length || sortedKeys[i+1] !== current + 1) {
+                if (rangeStart === current) {
+                    rangesString += `${current}, `;
+                } else {
+                    rangesString += `${rangeStart}-${current}, `;
+                }
+                rangeStart = -1;
+            }
+        }
+        statusText += rangesString.slice(0, -2); // Remove trailing comma and space
+    }
+    progressOverview.textContent = statusText;
 }
 
 
@@ -292,9 +332,23 @@ function processFrame() {
                     highestSequenceNumberSeen = sequenceNum;
                 }
                 // Update some UI about progress, e.g. number of chunks
-                if (progressOverview) {
-                    progressOverview.textContent = `Collected ${collectedChunks.size} unique chunks. Highest seq: ${highestSequenceNumberSeen}.`;
+                updateReceivedSequenceDisplay();
+
+                // Final chunk detection logic
+                if (totalChunksExpected === -1 && dataLength < presumedEncoderChunkSize) {
+                    totalChunksExpected = sequenceNum + 1;
+                    updateStatus(`Potential final chunk ${sequenceNum} detected (size ${dataLength} < ${presumedEncoderChunkSize}). Expecting ${totalChunksExpected} total chunks.`, false);
+                    updateReceivedSequenceDisplay(); // Update display again with new total expected
+                } else if (totalChunksExpected !== -1 && sequenceNum >= totalChunksExpected) {
+                    updateStatus(`Warning: Chunk ${sequenceNum} received, which is >= total expected chunks (${totalChunksExpected}). Possible misdetection or stream error.`, true);
+                } else if (totalChunksExpected !== -1 && dataLength === presumedEncoderChunkSize && sequenceNum === totalChunksExpected -1) {
+                    // This case means the "last" chunk (according to previously detected short chunk) is actually full size.
+                    // This implies the short chunk wasn't the end, or file size is exact multiple.
+                    // For now, we will trust the totalChunksExpected derived from the *first* short chunk.
+                    // More complex logic could reset totalChunksExpected if a later, shorter chunk appears.
                 }
+
+
             } else {
                 // updateStatus(`Duplicate chunk ${sequenceNum} received.`, false);
             }
@@ -322,39 +376,61 @@ function assembleData() {
 
     updateStatus(`Assembling ${collectedChunks.size} collected chunks... Highest sequence seen: ${highestSequenceNumberSeen}.`);
 
-    // Check for missing chunks up to the highest sequence number seen
-    let missingChunks = false;
-    let lastMissingChunk = -1;
-    for (let i = 0; i <= highestSequenceNumberSeen; i++) {
-        if (!collectedChunks.has(i)) {
-            missingChunks = true;
-            lastMissingChunk = i;
-            updateStatus(`Missing chunk with sequence number: ${i}`, true);
-        }
+    const expectedCount = totalChunksExpected !== -1 ? totalChunksExpected : highestSequenceNumberSeen + 1;
+    const finalHighestSeqToCheck = totalChunksExpected !== -1 ? totalChunksExpected - 1 : highestSequenceNumberSeen;
+
+    if (totalChunksExpected !== -1 && collectedChunks.size < totalChunksExpected) {
+        updateStatus(`Attempting to assemble, but not all expected chunks received. Expected ${totalChunksExpected}, Got ${collectedChunks.size}.`, true);
+        // Proceeding anyway, but user should be aware.
     }
 
-    if (missingChunks) {
-        progressOverview.textContent = `Data assembly incomplete. Missing chunks (e.g., ${lastMissingChunk}). Collected ${collectedChunks.size} of potential ${highestSequenceNumberSeen + 1}.`;
-        outputTextarea.value = `<Incomplete data: Missing chunks up to sequence ${highestSequenceNumberSeen}>`;
+
+    // Check for missing chunks up to the finalHighestSeqToCheck
+    let missingChunksExist = false;
+    let firstMissing = -1;
+    if (expectedCount > 0) { // Only check if we expect at least one chunk
+        for (let i = 0; i <= finalHighestSeqToCheck; i++) {
+            if (!collectedChunks.has(i)) {
+                missingChunksExist = true;
+                firstMissing = i;
+                updateStatus(`Missing chunk with sequence number: ${i}`, true);
+                break; // Stop at first missing for this message
+            }
+        }
+    } else if (collectedChunks.size === 0 && expectedCount === 0) {
+         // This case might happen if totalChunksExpected was set to 0 (e.g. an empty file was encoded)
+         // For now, this results in "No data collected" earlier. If an empty file result is desired,
+         // this logic might need adjustment.
+    }
+
+
+    if (missingChunksExist) {
+        progressOverview.textContent = `Data assembly incomplete. Missing chunk(s) (e.g., seq ${firstMissing}). Collected ${collectedChunks.size} of ${expectedCount}.`;
+        outputTextarea.value = `<Incomplete data: Missing chunk(s) up to sequence ${finalHighestSeqToCheck}. First missing: ${firstMissing}.>`;
         downloadLink.style.display = 'none';
-        // Optionally, could still offer to assemble what we have. For now, require all.
+        // Optionally, could still offer to assemble what we have. For now, require all up to expected.
         return;
     }
 
-    // All chunks from 0 to highestSequenceNumberSeen are present
-    progressOverview.textContent = `All ${highestSequenceNumberSeen + 1} chunks received! Assembling...`;
+    progressOverview.textContent = `All ${expectedCount} chunks from 0 to ${finalHighestSeqToCheck} received! Assembling...`;
 
     // Concatenate all chunks in order
-    // Calculate total size for the final buffer
     let totalSize = 0;
-    for (let i = 0; i <= highestSequenceNumberSeen; i++) {
-        totalSize += collectedChunks.get(i)!.length;
+    for (let i = 0; i <= finalHighestSeqToCheck; i++) {
+        const chunkData = collectedChunks.get(i);
+        if (chunkData) { // Should always be true if missingChunksExist is false
+            totalSize += chunkData.length;
+        } else {
+            // This should not happen if the missing chunk check above is correct
+            updateStatus(`Critical error during assembly: Chunk ${i} reported as present but not found.`, true);
+            return;
+        }
     }
 
     const reassembledData = new Uint8Array(totalSize);
     let currentOffset = 0;
-    for (let i = 0; i <= highestSequenceNumberSeen; i++) {
-        const chunk = collectedChunks.get(i)!;
+    for (let i = 0; i <= finalHighestSeqToCheck; i++) {
+        const chunk = collectedChunks.get(i)!; // Safe due to checks above
         reassembledData.set(chunk, currentOffset);
         currentOffset += chunk.length;
     }
