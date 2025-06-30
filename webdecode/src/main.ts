@@ -96,14 +96,14 @@ async function initXxhash() {
         updateStatus('xxhash global function found, attempting to initialize WASM...');
         const xxhashModule = await (window as any).xxhash(); // Initialize and get the module object
 
-        if (!xxhashModule || typeof xxhashModule.XXH64 !== 'function') {
-            updateStatus('XXH64 factory not found in the resolved xxhash module.', true);
-            console.log('Resolved xxhash module:', xxhashModule);
-            throw new Error('XXH64 factory not found in xxhash module.');
+        if (!xxhashModule || typeof xxhashModule.create64 !== 'function') {
+            updateStatus('create64 (XXH64 streaming factory) not found in the resolved xxhash module.', true);
+            console.log('Resolved xxhash module:', xxhashModule); // Log structure for inspection
+            throw new Error('create64 (XXH64 streaming factory) not found in xxhash module.');
         }
 
-        h64 = xxhashModule.XXH64; // Store the XXH64 factory
-        updateStatus('XXHash64 module initialized successfully.');
+        h64 = xxhashModule.create64; // Store the create64 factory (for streaming XXH64)
+        updateStatus('XXH64 streaming module (create64) initialized successfully.');
         if (startBtn) startBtn.disabled = false; // Enable start button
     } catch (error: any) {
         updateStatus(`Error initializing XXHash64: ${error.message || error}`, true);
