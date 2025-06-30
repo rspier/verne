@@ -3,10 +3,18 @@ body {
     margin: 20px;
     background-color: #f4f4f4;
     color: #333;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
 }
 
 h1, h2 {
     color: #333;
+    text-align: center;
+}
+
+#controls {
+    margin-bottom: 20px;
 }
 
 #controls button {
@@ -17,6 +25,7 @@ h1, h2 {
     border: none;
     border-radius: 5px;
     cursor: pointer;
+    font-size: 1em;
 }
 
 #controls button:disabled {
@@ -25,24 +34,72 @@ h1, h2 {
 }
 
 #captureContainer {
-    margin-top: 20px;
+    margin-top: 10px;
     border: 1px solid #ddd;
     background-color: #fff;
+    min-height: 50px; /* Placeholder if video is hidden */
+    width: 100%;
+    max-width: 640px;
 }
 
 #video {
     max-width: 100%;
     height: auto;
-    display: block; /* Remove extra space below video */
+    display: block; /* Remove extra space below video if shown */
 }
 
-#outputContainer {
+#statusContainer, #outputContainer {
     margin-top: 20px;
+    padding: 15px;
+    border: 1px solid #ddd;
+    background-color: #fff;
+    border-radius: 5px;
+    width: 100%;
+    max-width: 720px;
+    box-sizing: border-box;
 }
 
-#output img {
-    max-width: 100%;
-    height: auto;
+#statusOutput {
+    background-color: #e9e9e9;
+    padding: 10px;
+    border-radius: 3px;
+    min-height: 40px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+#outputText {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px;
     border: 1px solid #ccc;
+    border-radius: 3px;
+    margin-bottom: 10px;
+}
+
+#progressOverview {
+    font-size: 0.9em;
+    margin-bottom: 10px;
+    color: #555;
+}
+
+#fileNameInput {
+    padding: 8px;
+    margin-left: 10px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+}
+
+#downloadLink {
+    display: inline-block;
+    padding: 10px 15px;
+    background-color: #28a745;
+    color: white;
+    text-decoration: none;
+    border-radius: 5px;
     margin-top: 10px;
+}
+
+#downloadLink:hover {
+    background-color: #218838;
 }

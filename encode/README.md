@@ -23,40 +23,42 @@ This program encodes arbitrary data from an input file into a sequence of QR cod
 
 ## Setup and Build
 
-1.  **Clone the repository (if applicable) or ensure you have the `encode` directory.**
-2.  **Navigate to the `encode` directory:**
+This program is part of a single Go module at the repository root.
+
+1.  **Navigate to the repository root directory.**
     ```bash
-    cd path/to/yourproject/encode
+    cd path/to/yourproject
     ```
-3.  **Initialize Go module (if not already done):**
-    If you haven't already, and you're treating this as a standalone module:
-    ```bash
-    go mod init qrvidencode
-    # Or your preferred module name, e.g., github.com/youruser/yourproject/encode
-    ```
-4.  **Fetch dependencies:**
-    This will download the `skip2/go-qrcode` library.
+2.  **Fetch dependencies (if not already done):**
+    This command, run from the root, will download all necessary libraries for both the encoder and decoder.
     ```bash
     go mod tidy
     ```
-5.  **Build the executable:**
+3.  **Build the encoder executable:**
+    Run this command from the repository root.
     ```bash
-    go build -o qrvidencoder .
+    go build -o qrvidencoder ./encode
     ```
-    This will create an executable file named `qrvidencoder` (or `qrvidencoder.exe` on Windows) in the current directory.
+    This will create an executable file named `qrvidencoder` (or `qrvidencoder.exe` on Windows) in the repository root directory.
+    To place it inside the `encode` directory:
+    ```bash
+    go build -o encode/qrvidencoder ./encode
+    ```
 
 ## Usage
 
-Run the compiled program from your terminal:
-
+If you built `qrvidencoder` in the repository root:
 ```bash
 ./qrvidencoder -inputFile <path_to_input_file> [options]
 ```
-
-Or, using `go run` (useful for quick tests without explicit building):
-
+If you built it into the `encode` directory (e.g., `encode/qrvidencoder`):
 ```bash
-go run main.go -inputFile <path_to_input_file> [options]
+./encode/qrvidencoder -inputFile <path_to_input_file> [options]
+```
+
+Or, using `go run` from the repository root (useful for quick tests):
+```bash
+go run ./encode/main.go -inputFile <path_to_input_file> [options]
 ```
 
 ### Command-Line Flags
@@ -97,10 +99,14 @@ go run main.go -inputFile <path_to_input_file> [options]
 
 1.  The input file is read.
 2.  The data is split into chunks based on the `-chunkSize`.
-3.  For each chunk:
-    a.  A QR code is generated using the specified parameters (`-qrLevel`). The library automatically includes a standard quiet zone/border.
-    b.  The QR code is saved as a PNG image of size `-qrSize` x `-qrSize` in a temporary directory.
-4.  `ffmpeg` is used to compile these PNG images into a video:
+3.  The data is split into chunks based on the `-chunkSize`. The `chunkSize` refers to the amount of original data per chunk.
+4.  For each chunk of original data:
+    a.  A 4-byte sequence number (0-indexed, BigEndian) is prepended.
+    b.  An 8-byte XXH64 checksum (BigEndian) of `[sequence_number_bytes][original_data_chunk_bytes]` is calculated and prepended to that.
+    c.  The final payload for the QR code is `[checksum_bytes][sequence_number_bytes][original_data_chunk_bytes]`. This means each QR code carries an additional 12 bytes of metadata beyond the `chunkSize`.
+    d.  A QR code is generated for this final payload using the specified parameters (`-qrLevel`). The library automatically includes a standard quiet zone/border.
+    e.  The QR code is saved as a PNG image of size `-qrSize` x `-qrSize` in a temporary directory.
+5.  `ffmpeg` is used to compile these PNG images into a video:
     *   The `-framerate` option for `ffmpeg`'s input images is calculated as `fps / framesPerQR`. This determines how long each unique QR image is shown.
     *   The output video uses the `-fps` and `-resolution` specified.
 5.  The temporary directory containing PNG images is deleted.

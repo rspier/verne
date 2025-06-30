@@ -1,0 +1,338 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"image"
+	_ "image/png" // Needed for image.Decode to recognize PNGs
+	"sort"
+	"encoding/binary" // For parsing sequence number and checksum
+	"encoding/hex"    // For hex decoding
+	"bytes"           // For bytes.Buffer
+	"io"              // For io.ReadFull
+
+	"github.com/cespare/xxhash/v2" // For XXH64 checksum
+	"github.com/makiuchi-d/gozxing"
+	"github.com/makiuchi-d/gozxing/qrcode"
+)
+
+// ChunkHeader defines the metadata prepended to each data chunk.
+// Note: The order of fields matters for serialization.
+// This must be identical to the definition in the encoder.
+type ChunkHeader struct {
+	Checksum    uint64 // XXH64 checksum of (SequenceNum (4B) + DataLength (4B) + OriginalData)
+	SequenceNum uint32 // Sequence number of the chunk
+	DataLength  uint32 // Length of the OriginalData part
+}
+
+// Actual size of header when serialized: 8 (Checksum) + 4 (SequenceNum) + 4 (DataLength) = 16 bytes
+const newHeaderSize = 16
+
+var (
+	inputFile         string
+	outputFile        string
+	tempDirPrefix     string
+	framesToSkip      int
+	maxFramesToProcess int
+)
+
+// findFFmpegExecutable attempts to find ffmpeg, first in PATH, then in common hardcoded locations.
+func findFFmpegExecutable() (string, error) {
+	// 1. Try PATH
+	path, err := exec.LookPath("ffmpeg")
+	if err == nil {
+		return path, nil
+	}
+
+	// 2. Try common hardcoded paths
+	commonPaths := []string{"/usr/bin/ffmpeg"} // Add more if needed, e.g., "/usr/local/bin/ffmpeg"
+	for _, p := range commonPaths {
+		info, err := os.Stat(p)
+		if err == nil {
+			// Check if it's a regular file and executable
+			if !info.IsDir() && (info.Mode()&0111 != 0) { // Check if executable by user/group/other
+				return p, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("ffmpeg not found in PATH or common locations (%s): %w", strings.Join(commonPaths, ", "), err) // return original LookPath error
+}
+
+func main() {
+	flag.StringVar(&inputFile, "inputFile", "", "Path to the input video file (required)")
+	flag.StringVar(&outputFile, "outputFile", "", "Path to the output file for decoded data (required)")
+	flag.StringVar(&tempDirPrefix, "tempDirPrefix", "qrvid_decode_frames_", "Prefix for temporary directory to store extracted frames")
+	flag.IntVar(&framesToSkip, "framesToSkip", 0, "Number of initial frames to skip in the video")
+	flag.IntVar(&maxFramesToProcess, "maxFramesToProcess", 0, "Maximum number of frames to process after skipping (0 for all)")
+
+	flag.Parse()
+
+	ffmpegPath, err := findFFmpegExecutable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error finding ffmpeg: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Please ensure ffmpeg is installed and in your PATH, or accessible at /usr/bin/ffmpeg.")
+		os.Exit(1)
+	}
+	fmt.Printf("Using ffmpeg executable at: %s\n", ffmpegPath)
+
+	if inputFile == "" || outputFile == "" {
+		fmt.Fprintln(os.Stderr, "Error: -inputFile and -outputFile are required.")
+		flag.Usage()
+		os.Exit(1)
+	}
+
+	fmt.Println("QR Video Decoder")
+	fmt.Printf("Input Video File: %s\n", inputFile)
+	fmt.Printf("Output Data File: %s\n", outputFile)
+	fmt.Printf("Temp Dir Prefix: %s\n", tempDirPrefix)
+	fmt.Printf("Frames to Skip: %d\n", framesToSkip)
+	if maxFramesToProcess > 0 {
+		fmt.Printf("Max Frames to Process: %d\n", maxFramesToProcess)
+	} else {
+		fmt.Println("Max Frames to Process: All")
+	}
+
+	// Create a temporary directory for extracted frames
+	tempDir, err := os.MkdirTemp("", tempDirPrefix)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating temporary directory: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() {
+		fmt.Printf("Cleaning up temporary directory: %s\n", tempDir)
+		if err := os.RemoveAll(tempDir); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to remove temporary directory %s: %v\n", tempDir, err)
+		}
+	}()
+	fmt.Printf("Using temporary directory for frames: %s\n", tempDir)
+
+	// --- Frame Extraction using ffmpeg ---
+	fmt.Println("Starting frame extraction with ffmpeg...")
+
+	ffmpegArgs := []string{
+		"-i", inputFile,
+	}
+
+	// Frame filtering
+	// Select frames greater than or equal to framesToSkip.
+	// If maxFramesToProcess is set, limit the number of output frames.
+	var vfOptions []string
+	if framesToSkip > 0 {
+		vfOptions = append(vfOptions, fmt.Sprintf("select='gte(n\\,%d)'", framesToSkip))
+	}
+
+	if len(vfOptions) > 0 {
+		ffmpegArgs = append(ffmpegArgs, "-vf", strings.Join(vfOptions, ","))
+	}
+
+	// If maxFramesToProcess is set, apply it using the -frames:v option.
+	// This option should come after -vf according to some ffmpeg documentation,
+	// or it might apply to the input depending on version.
+	// It's generally safer to apply it as an output option.
+	if maxFramesToProcess > 0 {
+		ffmpegArgs = append(ffmpegArgs, "-frames:v", strconv.Itoa(maxFramesToProcess))
+	}
+
+	ffmpegArgs = append(ffmpegArgs, filepath.Join(tempDir, "frame_%06d.png"))
+
+	cmd := exec.Command(ffmpegPath, ffmpegArgs...) // Use found ffmpegPath
+	fmt.Printf("Executing ffmpeg command: %s %s\n", ffmpegPath, strings.Join(cmd.Args, " "))
+
+	outputBytes, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error running ffmpeg for frame extraction: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ffmpeg output:\n%s\n", string(outputBytes))
+		os.Exit(1)
+	}
+
+	fmt.Printf("Frame extraction successful. Frames saved in %s\n", tempDir)
+	// For debugging, print ffmpeg output if needed, but can be verbose
+	// fmt.Printf("ffmpeg output:\n%s\n", string(outputBytes))
+
+	// --- QR Code Decoding ---
+	fmt.Println("Starting QR code decoding from extracted frames...")
+
+	// List extracted frames
+	framePattern := filepath.Join(tempDir, "frame_*.png")
+	extractedFrames, err := filepath.Glob(framePattern)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error listing extracted frames from %s: %v\n", tempDir, err)
+		os.Exit(1)
+	}
+	if len(extractedFrames) == 0 {
+		fmt.Fprintf(os.Stderr, "No frames found in %s. ffmpeg might not have extracted any images.\n", tempDir)
+		// If no frames, it means no data, so write an empty output file.
+		if writeErr := os.WriteFile(outputFile, []byte{}, 0644); writeErr != nil {
+			fmt.Fprintf(os.Stderr, "Error writing empty output file %s: %v\n", outputFile, writeErr)
+		} else {
+			fmt.Println("No frames extracted, empty output file written.")
+		}
+		os.Exit(0) // Successful exit, as there was no data to process.
+	}
+	// Sort frames to ensure correct order, Glob doesn't guarantee order
+	sort.Strings(extractedFrames)
+
+	fmt.Printf("Found %d frames to process for QR decoding.\n", len(extractedFrames))
+
+	// decodedChunks stores the original data part of valid chunks, keyed by sequence number.
+	decodedChunks := make(map[uint32][]byte)
+	// seenRawPayloads helps in quickly skipping already processed identical raw QR payloads
+	// that might appear on consecutive frames for the same data chunk.
+	seenRawPayloads := make(map[string]bool)
+	var maxSequenceNum uint32 = 0 // Keep track of the highest sequence number encountered for ordered reconstruction.
+	                               // Initialized to 0, assuming sequence numbers are >= 0.
+	foundAnyValidChunk := false
+
+	for frameIdx, framePath := range extractedFrames {
+		imgFile, ferr := os.Open(framePath)
+		if ferr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not open frame image %s: %v. Skipping.\n", framePath, ferr)
+			continue
+		}
+
+		img, _, derr := image.Decode(imgFile)
+		imgFile.Close() // Close file immediately after decode attempt
+		if derr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not decode image format for %s: %v. Skipping.\n", framePath, derr)
+			continue
+		}
+
+		bmp, berr := gozxing.NewBinaryBitmapFromImage(img)
+		if berr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not create binary bitmap for %s: %v. Skipping.\n", framePath, berr)
+			continue
+		}
+
+		qrReader := qrcode.NewQRCodeReader()
+		result, qrerr := qrReader.Decode(bmp, nil) // No hints needed for now
+
+		if qrerr != nil {
+			// This is common if a frame doesn't have a QR code or it's not scannable
+			// fmt.Printf("Frame %d (%s): No QR code found or failed to decode: %v\n", frameIdx+1, filepath.Base(framePath), qrerr)
+			continue
+		}
+
+		// Encoder now writes a hex string into the QR code.
+		// Decoder should retrieve this as text.
+		hexStringFromQR := result.GetText()
+
+		// Deduplicate based on the hex string content of the QR code
+		if _, seen := seenRawPayloads[hexStringFromQR]; seen {
+			// fmt.Printf("Frame %d (%s): Duplicate raw QR payload (hex string) already processed. Skipping.\n", frameIdx+1, filepath.Base(framePath))
+			continue
+		}
+		seenRawPayloads[hexStringFromQR] = true // Mark this raw payload as processed.
+
+		// Hex-decode the content
+		rawPayloadBytes, err := hex.DecodeString(hexStringFromQR)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s): Failed to hex-decode QR content: %v. Content: '%s'. Skipping.\n", frameIdx+1, filepath.Base(framePath), err, hexStringFromQR)
+			continue
+		}
+
+		if len(rawPayloadBytes) < newHeaderSize {
+			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s): Decoded QR payload too short (%d bytes) for header. Min required: %d. Skipping.\n", frameIdx+1, filepath.Base(framePath), len(rawPayloadBytes), newHeaderSize)
+			continue
+		}
+
+		reader := bytes.NewReader(rawPayloadBytes)
+		var header ChunkHeader
+		err = binary.Read(reader, binary.BigEndian, &header)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s): Failed to read chunk header: %v. Skipping.\n", frameIdx+1, filepath.Base(framePath), err)
+			continue
+		}
+
+		if reader.Len() < int(header.DataLength) {
+			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s), Seq %d: Payload data length mismatch. Header.DataLength=%d, remaining_payload_bytes=%d. Skipping chunk.\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum, header.DataLength, reader.Len())
+			continue
+		}
+
+		originalData := make([]byte, header.DataLength)
+		_, err = io.ReadFull(reader, originalData) // Ensure all expected bytes are read
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s), Seq %d: Failed to read original data (expected %d bytes): %v. Skipping.\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum, header.DataLength, err)
+			continue
+		}
+
+		// Verify checksum: Checksum covers SequenceNum (4B) + DataLength (4B) + OriginalData
+		headerForChecksumBytes := make([]byte, 4+4)
+		binary.BigEndian.PutUint32(headerForChecksumBytes[0:4], header.SequenceNum)
+		binary.BigEndian.PutUint32(headerForChecksumBytes[4:8], header.DataLength)
+
+		dataThatWasChecksummed := append(headerForChecksumBytes, originalData...)
+		calculatedChecksum := xxhash.Sum64(dataThatWasChecksummed)
+
+		if calculatedChecksum != header.Checksum {
+			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s), Seq %d: Checksum mismatch! Expected %016x, got %016x. Discarding chunk.\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum, header.Checksum, calculatedChecksum)
+			continue
+		}
+
+		foundAnyValidChunk = true
+		if _, exists := decodedChunks[header.SequenceNum]; !exists {
+			decodedChunks[header.SequenceNum] = originalData
+			fmt.Printf("Frame %d (%s): Stored Seq %d, Checksum OK. Data len: %d.\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum, len(originalData))
+		} else {
+			// Data for this sequence number already exists. For now, first one wins.
+			fmt.Printf("Frame %d (%s): Seq %d (Checksum OK) already stored. Ignoring duplicate.\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum)
+		}
+
+		if header.SequenceNum > maxSequenceNum {
+			maxSequenceNum = header.SequenceNum
+		}
+	}
+
+	if !foundAnyValidChunk {
+		fmt.Println("No valid QR code chunks were successfully decoded from any frames.")
+		// Write an empty output file.
+		if writeErr := os.WriteFile(outputFile, []byte{}, 0644); writeErr != nil {
+			fmt.Fprintf(os.Stderr, "Error writing empty output file %s: %v\n", outputFile, writeErr)
+			os.Exit(1)
+		}
+		fmt.Println("Empty output file written.")
+		os.Exit(0)
+	}
+
+	fmt.Printf("Total unique, valid QR data chunks to assemble: %d (highest sequence number seen: %d)\n", len(decodedChunks), maxSequenceNum)
+
+	// --- Data Aggregation and Output ---
+	var finalDataBuffer bytes.Buffer // Use bytes.Buffer for efficient concatenation
+	missingSequences := false
+	for i := uint32(0); i <= maxSequenceNum; i++ {
+		chunkData, ok := decodedChunks[i]
+		if !ok {
+			fmt.Fprintf(os.Stderr, "Error: Missing data chunk for sequence number %d.\n", i)
+			missingSequences = true
+		} else {
+			finalDataBuffer.Write(chunkData)
+		}
+	}
+
+	if missingSequences {
+		fmt.Fprintf(os.Stderr, "Critical Error: One or more data chunks were missing. The decoded data is incomplete and likely corrupted. Output file will not be written or will be incomplete.\n")
+		// Decide on behavior: exit, or write partial data.
+		// For now, let's write what we have but ensure the user knows it's bad.
+		// To prevent writing corrupted data, uncomment os.Exit(1)
+		// os.Exit(1)
+	}
+
+	err = os.WriteFile(outputFile, finalDataBuffer.Bytes(), 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing decoded data to output file %s: %v\n", outputFile, err)
+		os.Exit(1)
+	}
+
+	if missingSequences {
+		fmt.Printf("Wrote %d bytes to %s, but the data is incomplete due to missing sequence numbers.\n", finalDataBuffer.Len(), outputFile)
+	} else {
+		fmt.Printf("Successfully wrote %d bytes of decoded data to %s\n", finalDataBuffer.Len(), outputFile)
+	}
+
+	fmt.Println("Decoder finished.")
+}
