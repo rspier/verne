@@ -239,39 +239,39 @@ func main() {
 			continue
 		}
 
-		// Add a 20px border around the QR code
-		const borderSize = 20
-		minQrSymbolSize := 20 // Minimum practical size for the QR symbol itself
-		if qrSize < (2*borderSize + minQrSymbolSize) {
-			fmt.Fprintf(os.Stderr, "Error: qrSize %d is too small to accommodate a %dpx border and a scannable QR code. Minimum recommended qrSize is %d.\n", qrSize, borderSize, (2*borderSize + minQrSymbolSize))
-			// Decide whether to error out or try to proceed. For now, let's error.
-			os.Exit(1)
-		}
-
-		innerQrActualSize := qrSize - (2 * borderSize)
-
-		// Scale the barcode to the inner size
-		scaledInnerQrCode, err := barcode.Scale(qrCode, innerQrActualSize, innerQrActualSize)
+		// Scale the barcode to the desired size (this is the QR symbol itself)
+		originalScaledQrCode, err := barcode.Scale(qrCode, qrSize, qrSize)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error scaling QR code for chunk %d (seq %d) to inner size %dx%d: %v\n", i, header.SequenceNum, innerQrActualSize, innerQrActualSize, err)
+			fmt.Fprintf(os.Stderr, "Error scaling QR code for chunk %d (seq %d) to %dx%d: %v\n", i, header.SequenceNum, qrSize, qrSize, err)
 			continue
 		}
 
-		// Create a new canvas image of qrSize x qrSize, filled with white for the border
-		finalQrImage := image.NewRGBA(image.Rect(0, 0, qrSize, qrSize))
-		draw.Draw(finalQrImage, finalQrImage.Bounds(), image.White, image.Point{}, draw.Src)
+		// Add a 20px white border around the originalScaledQrCode
+		const borderSize = 20
+		finalCanvasWidth := qrSize + (2 * borderSize)
+		finalCanvasHeight := qrSize + (2 * borderSize)
 
-		// Draw the scaled QR code onto the canvas, offset by borderSize
-		draw.Draw(finalQrImage, scaledInnerQrCode.Bounds().Add(image.Point{X: borderSize, Y: borderSize}), scaledInnerQrCode, image.Point{}, draw.Over)
+		// Create a new canvas image, filled with white for the border
+		borderedQrImageCanvas := image.NewRGBA(image.Rect(0, 0, finalCanvasWidth, finalCanvasHeight))
+		draw.Draw(borderedQrImageCanvas, borderedQrImageCanvas.Bounds(), image.White, image.Point{}, draw.Src)
 
-		// Save QR code as a PNG file
+		// Draw the original scaled QR code (which is qrSize x qrSize) onto the canvas,
+		// positioning its top-left corner at (borderSize, borderSize)
+		draw.Draw(borderedQrImageCanvas,
+			originalScaledQrCode.Bounds().Add(image.Point{X: borderSize, Y: borderSize}),
+			originalScaledQrCode,
+			image.Point{}, // Start drawing from originalScaledQrCode's origin (0,0)
+			draw.Over)
+
+		// Save the bordered QR code canvas as a PNG file
+		// The final image will be (qrSize + 40) x (qrSize + 40)
 		frameFileName := filepath.Join(tempDir, fmt.Sprintf("qr_frame_%04d.png", i))
 		file, err := os.Create(frameFileName)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating PNG file for chunk %d (seq %d): %v\n", i, header.SequenceNum, err)
 			continue
 		}
-		err = png.Encode(file, finalQrImage) // Encode the canvas with the bordered QR
+		err = png.Encode(file, borderedQrImageCanvas) // Encode the canvas with the QR code and its new external border
 		file.Close() // Close the file even if png.Encode fails, though it might be a bit late.
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error writing QR code PNG for chunk %d (seq %d) to %s: %v\n", i, header.SequenceNum, frameFileName, err)
