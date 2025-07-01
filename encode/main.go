@@ -10,8 +10,11 @@ import (
 	"strings"
 	"bytes"           // For bytes.Buffer
 	"encoding/binary" // For converting sequence number to bytes
+	"io"              // For io.Copy
 	"encoding/hex"    // For hex encoding the payload
 	"image/png"       // For saving QR code as PNG
+	"image"
+	"image/color"
 
 	"github.com/boombuler/barcode"
 	"github.com/boombuler/barcode/qr"
@@ -44,6 +47,30 @@ var (
 	framesPerQR int
 	resolution  string
 )
+
+// createBlankImage creates a blank (black) PNG image.
+func createBlankImage(filePath string, width int, height int) error {
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	// Fill image with black color (default is transparent black for NewRGBA)
+	// To ensure it's opaque black:
+	for x := 0; x < width; x++ {
+		for y := 0; y < height; y++ {
+			img.Set(x, y, color.Black)
+		}
+	}
+
+	file, err := os.Create(filePath)
+	if err != nil {
+		return fmt.Errorf("creating blank image file %s: %w", filePath, err)
+	}
+	defer file.Close()
+
+	err = png.Encode(file, img)
+	if err != nil {
+		return fmt.Errorf("encoding blank image to PNG %s: %w", filePath, err)
+	}
+	return nil
+}
 
 // findFFmpegExecutable attempts to find ffmpeg, first in PATH, then in common hardcoded locations.
 func findFFmpegExecutable() (string, error) {
@@ -142,8 +169,35 @@ func main() {
 	defer os.RemoveAll(tempDir) // Clean up afterwards
 	fmt.Printf("Using temporary directory for frames: %s\n", tempDir)
 
+	// Parse resolution for padding frames
+	videoWidth, videoHeight, err := parseResolution(resolution)
+	if err != nil {
+		// Fallback to qrSize if resolution is invalid, though it should be caught later by ffmpeg arg validation too
+		fmt.Fprintf(os.Stderr, "Warning: could not parse resolution '%s' for padding frames: %v. Using %dx%d\n", resolution, err, qrSize, qrSize)
+		videoWidth = qrSize
+		videoHeight = qrSize
+	}
+
+	paddingDurationSeconds := 2
+	numPaddingFrames := paddingDurationSeconds * fps // Total frames for one side of padding
+
+	allFrameFilePaths := []string{} // Will hold all frames: initial padding, QR, final padding
+
+	// Generate initial padding frames
+	fmt.Printf("Generating %d initial padding frames...\n", numPaddingFrames)
+	for i := 0; i < numPaddingFrames; i++ {
+		frameFileName := filepath.Join(tempDir, fmt.Sprintf("padding_frame_init_%04d.png", i))
+		err := createBlankImage(frameFileName, videoWidth, videoHeight)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating initial padding frame %s: %v\n", frameFileName, err)
+			os.Exit(1) // Critical error, exit
+		}
+		allFrameFilePaths = append(allFrameFilePaths, frameFileName)
+	}
+
 	// Generate and save QR code images
-	imageFilePaths := []string{}
+	// qrImageFilePaths will store the paths to each QR code image, duplicated framesPerQR times.
+	actualQrImageFiles := []string{} // Temporary list for unique QR images
 	for i, originalChunkData := range chunks {
 		header := ChunkHeader{
 			SequenceNum: uint32(i),
@@ -205,15 +259,71 @@ func main() {
 			continue
 		}
 
-		imageFilePaths = append(imageFilePaths, frameFileName)
+		actualQrImageFiles = append(actualQrImageFiles, frameFileName)
 		// Log the size of the hexPayload string, as that's what's passed to qr.Encode
 		fmt.Printf("Generated QR code for chunk %d (seq %d), hex payload size %d chars: %s\n", i, header.SequenceNum, len(hexPayload), frameFileName)
 	}
 
-	if len(imageFilePaths) == 0 {
-		fmt.Fprintf(os.Stderr, "No QR code images were successfully generated. Cannot create video.\n")
+	if len(actualQrImageFiles) == 0 {
+		fmt.Fprintf(os.Stderr, "No QR code images were successfully generated. Cannot create video without QR frames.\n")
 		os.Exit(1)
 	}
+
+	// Now, populate qrImageFilePaths by duplicating according to framesPerQR
+	qrImageFilePaths := []string{}
+	for _, qrFile := range actualQrImageFiles {
+		for j := 0; j < framesPerQR; j++ {
+			// If framesPerQR > 1, we need to either duplicate the file or make ffmpeg hold the frame.
+			// The renaming strategy (frame_00000X.png) requires distinct files for ffmpeg's image sequence input if we set input fps = output fps.
+			// So, we must duplicate the actual files.
+			if j == 0 {
+				qrImageFilePaths = append(qrImageFilePaths, qrFile) // Use the original for the first instance
+			} else {
+				// Create a copy of the QR file for duplicates
+				// This is inefficient but ensures each frame for ffmpeg is a unique file if input fps = output fps.
+				// A better ffmpeg command might use concat for this, but file duplication is simpler for now.
+				dupQrFileName := strings.TrimSuffix(qrFile, ".png") + fmt.Sprintf("_dup%d.png", j)
+
+				sourceFile, err := os.Open(qrFile)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error opening QR source file for duplication %s: %v\n", qrFile, err)
+					os.Exit(1)
+				}
+				defer sourceFile.Close()
+
+				destFile, err := os.Create(dupQrFileName)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error creating QR duplicate file %s: %v\n", dupQrFileName, err)
+					os.Exit(1)
+				}
+				defer destFile.Close()
+
+				_, err = io.Copy(destFile, sourceFile)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error copying QR file for duplication from %s to %s: %v\n", qrFile, dupQrFileName, err)
+					os.Exit(1)
+				}
+				qrImageFilePaths = append(qrImageFilePaths, dupQrFileName)
+			}
+		}
+	}
+	fmt.Printf("Expanded %d unique QR images to %d frames (framesPerQR: %d)\n", len(actualQrImageFiles), len(qrImageFilePaths), framesPerQR)
+
+
+	allFrameFilePaths = append(allFrameFilePaths, qrImageFilePaths...)
+
+	// Generate final padding frames
+	fmt.Printf("Generating %d final padding frames...\n", numPaddingFrames)
+	for i := 0; i < numPaddingFrames; i++ {
+		frameFileName := filepath.Join(tempDir, fmt.Sprintf("padding_frame_final_%04d.png", i))
+		err := createBlankImage(frameFileName, videoWidth, videoHeight)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating final padding frame %s: %v\n", frameFileName, err)
+			os.Exit(1) // Critical error, exit
+		}
+		allFrameFilePaths = append(allFrameFilePaths, frameFileName)
+	}
+
 
 	// --- Video Encoding using ffmpeg ---
 	fmt.Println("Starting video encoding with ffmpeg...")
@@ -225,24 +335,95 @@ func main() {
 	// and the video output fps is `fps`, then the duration of one QR image is `framesPerQR / fps` seconds.
 	// The input framerate for ffmpeg for the image sequence should be `1 / duration_of_one_image`.
 	// So, `ffmpeg_input_fps = fps / framesPerQR`.
-	ffmpegInputFPS := float64(fps) / float64(framesPerQR)
+	// This calculation changes slightly. Each frame in allFrameFilePaths is unique and shown once.
+	// If framesPerQR > 1, it means each QR code *image* was intended to last longer.
+	// We now have distinct images for each "slot", including padding.
+	// The concept of framesPerQR as a multiplier for QR images is less direct.
+	// Instead, ffmpeg should process each image file as one frame.
+	// If a QR code was meant to be displayed for `framesPerQR` video frames,
+	// we should have duplicated that QR image `framesPerQR` times in `qrImageFilePaths` before padding.
+	// For now, let's assume framesPerQR = 1 for simplicity with the new padding scheme,
+	// meaning each QR image file corresponds to one video frame duration as set by `fps`.
+	// If framesPerQR > 1 was used, the original code would make ffmpeg hold one QR image for multiple output frames.
+	// With padding, we want each *image file* to be one input frame for ffmpeg.
+	// The most straightforward way is to ensure each image in allFrameFilePaths is one frame.
+	// If a QR code itself needs to be displayed longer (e.g. for `framesPerQR` video frames),
+	// then the `qrImageFilePaths` list should have contained duplicates of that QR frame *before* being added to `allFrameFilePaths`.
+	// The current code does not do this; it generates one PNG per chunk.
+	//
+	// Let's adjust how `ffmpegInputFPS` is determined or used.
+	// The `-framerate` option for ffmpeg's image sequence input dictates how many input images make up one second of video.
+	// If we want each image file (padding or QR) to have a duration of 1/fps seconds (where fps is the output video fps),
+	// then the input framerate for the image sequence should be `fps`.
+	// However, the existing `framesPerQR` logic means one QR image file is held for `framesPerQR` output frames.
+	//
+	// Let's simplify: each entry in `allFrameFilePaths` will become one frame in an intermediate sequence.
+	// We will then tell ffmpeg to pick up these frames.
+	// The duration of each of these frames in the final video is effectively (1/fps) if framesPerQR is 1.
+	// If framesPerQR > 1, the original code made *ffmpeg* hold the frame.
+	//
+	// To implement padding correctly, we need a continuous sequence of images.
+	// Step 1: Rename all files in allFrameFilePaths to a consistent pattern.
+	finalSequenceTempDir, err := os.MkdirTemp(tempDir, "final_sequence_")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating final sequence temporary directory: %v\n", err)
+		os.Exit(1)
+	}
+	// Note: finalSequenceTempDir is inside tempDir, so it will be cleaned up by the main defer.
+
+	renamedFramePaths := []string{}
+	for i, oldPath := range allFrameFilePaths {
+		newFileName := fmt.Sprintf("frame_%06d.png", i) // Use 6 digits for safety
+		newPath := filepath.Join(finalSequenceTempDir, newFileName)
+		err := os.Rename(oldPath, newPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error renaming frame from %s to %s: %v\n", oldPath, newPath, err)
+			os.Exit(1)
+		}
+		renamedFramePaths = append(renamedFramePaths, newPath)
+	}
+	fmt.Printf("Renamed %d frames into %s for ffmpeg input.\n", len(renamedFramePaths), finalSequenceTempDir)
+
+	// ffmpegInputFPS should be `fps / framesPerQR` as per original logic.
+	// This means if fps=10 and framesPerQR=2, ffmpeg consumes images at 5 images/sec,
+	// and since output is 10fps, each input image is shown for 2 output frames.
+	// This logic should still apply to the QR portion. Padding frames are 1:1.
+	// This makes it complex.
+	//
+	// Simpler model: each file in `renamedFramePaths` is one input frame.
+	// The `-framerate` for ffmpeg input should be the desired final video `fps`.
+	// And each QR code image should be duplicated `framesPerQR` times in the `qrImageFilePaths` list
+	// *before* it's merged into `allFrameFilePaths`.
+	//
+	// Let's modify the QR image generation loop to handle `framesPerQR`.
+
+	// Revisit: The current plan step is to adjust ffmpeg input.
+	// The simplest way to handle padding is to make all images (padding & QR) part of one sequence
+	// and have each image be one input frame for ffmpeg.
+	// If framesPerQR > 1, we must duplicate the QR image files.
+	// This change should occur when qrImageFilePaths is populated.
+	//
+	// For now, assuming framesPerQR = 1 for the purpose of ffmpeg input.
+	// If framesPerQR > 1, the current code would extend duration, which is fine for padding too.
+	// The critical ffmpeg parameter is `-framerate` for the input sequence.
+	// If we have N total images, and output is `fps` with each image held for `framesPerQR` output frames,
+	// then total duration is N * framesPerQR / fps.
+	// The input framerate to ffmpeg should be `fps / framesPerQR`.
+	//
+	// UPDATE: With file duplication for framesPerQR, each file in renamedFramePaths
+	// corresponds to one output video frame. So, the input framerate to ffmpeg
+	// should be the same as the output video fps.
+	// ffmpegInputFPS := float64(fps) / float64(framesPerQR) // Old logic
+	ffmpegInputFrameRate := strconv.Itoa(fps) // New logic: input fps = output fps
+
 
 	// ffmpeg command arguments
-	// Example: ffmpeg -framerate 1 -i tempdir/qr_frame_%04d.png -c:v libx264 -r 10 -pix_fmt yuv420p -s 256x256 output.mp4
-	// -framerate <rate> : input frame rate for image sequence
-	// -i <pattern> : input files
-	// -c:v libx264 : video codec
-	// -r <rate> : output video frame rate
-	// -pix_fmt yuv420p : pixel format, good for compatibility
-	// -s <WxH> : video size/resolution
-	// -y : overwrite output file without asking
-
 	ffmpegArgs := []string{
 		"-y", // Overwrite output file
-		"-framerate", strconv.FormatFloat(ffmpegInputFPS, 'f', -1, 64),
-		"-i", filepath.Join(tempDir, "qr_frame_%04d.png"),
+		"-framerate", ffmpegInputFrameRate, // Input image sequence framerate
+		"-i", filepath.Join(finalSequenceTempDir, "frame_%06d.png"), // Use the new pattern
 		"-c:v", "libx264",
-		"-r", strconv.Itoa(fps),
+		"-r", strconv.Itoa(fps), // Output video frame rate (should match input -framerate)
 		"-pix_fmt", "yuv420p",
 	}
 
