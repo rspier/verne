@@ -21,6 +21,7 @@ import (
 	"time"
 	"math" // For math.MaxUint16
 
+	"github.com/klauspost/compress/zstd" // For Zstandard compression
 	"github.com/boombuler/barcode"
 	"github.com/boombuler/barcode/qr"
 	"github.com/cespare/xxhash/v2" // For XXH64 checksum
@@ -304,17 +305,29 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Chunk data
+	// Compress the data using Zstandard
+	fmt.Printf("Read %d bytes from %s. Compressing with zstd...\n", len(data), inputFile)
+	zstdEncoder, errEnc := zstd.NewWriter(nil)
+	if errEnc != nil {
+		fmt.Fprintf(os.Stderr, "Error creating zstd writer: %v\n", errEnc)
+		os.Exit(1)
+	}
+	compressedData := zstdEncoder.EncodeAll(data, make([]byte, 0, len(data)/2)) // Pre-allocate roughly half size
+	zstdEncoder.Close() // Important to close to flush any buffered data, though EncodeAll usually does this.
+
+	fmt.Printf("Compressed data size: %d bytes (Original: %d bytes).\n", len(compressedData), len(data))
+
+	// Chunk data (now chunking the compressedData)
 	var chunks [][]byte
-	for i := 0; i < len(data); i += chunkSize {
+	for i := 0; i < len(compressedData); i += chunkSize {
 		end := i + chunkSize
-		if end > len(data) {
-			end = len(data)
+		if end > len(compressedData) {
+			end = len(compressedData)
 		}
-		chunks = append(chunks, data[i:end])
+		chunks = append(chunks, compressedData[i:end])
 	}
 
-	fmt.Printf("Read %d bytes from %s, split into %d chunks.\n", len(data), inputFile, len(chunks))
+	fmt.Printf("Split compressed data into %d chunks.\n", len(chunks))
 
 	if len(chunks) == 0 {
 		fmt.Println("No data to encode. Exiting.")

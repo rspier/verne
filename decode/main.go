@@ -20,6 +20,7 @@ import (
 	"github.com/cespare/xxhash/v2" // For XXH64 checksum
 	"github.com/makiuchi-d/gozxing"
 	"github.com/makiuchi-d/gozxing/qrcode"
+	"github.com/klauspost/compress/zstd" // For Zstandard decompression
 )
 
 // ChunkHeader defines the metadata prepended to each data chunk.
@@ -367,20 +368,35 @@ func main() {
 		}
 	}
 
-	err = os.WriteFile(outputFile, finalDataBuffer.Bytes(), 0644)
+	// At this point, finalDataBuffer contains the reassembled ZSTD-compressed data.
+	// Decompress it.
+	fmt.Printf("Reassembled %d bytes of compressed data. Decompressing with zstd...\n", finalDataBuffer.Len())
+	zstdDecoder, err := zstd.NewReader(nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing decoded data to output file %s: %v\n", outputFile, err)
+		fmt.Fprintf(os.Stderr, "Error creating zstd reader: %v\n", err)
+		os.Exit(1)
+	}
+	defer zstdDecoder.Close()
+
+	decompressedData, err := zstdDecoder.DecodeAll(finalDataBuffer.Bytes(), nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error decompressing data: %v\n", err)
+		// Optionally, write the compressed data for debugging if decompression fails?
+		// For now, just exit.
+		os.Exit(1)
+	}
+	fmt.Printf("Decompressed data size: %d bytes.\n", len(decompressedData))
+
+	err = os.WriteFile(outputFile, decompressedData, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing decompressed data to output file %s: %v\n", outputFile, err)
 		os.Exit(1)
 	}
 
 	if missingSequences {
-		fmt.Printf("Wrote %d bytes to %s, BUT THE DATA IS INCOMPLETE due to missing sequence numbers.\n", finalDataBuffer.Len(), outputFile)
-	} else if finalDataBuffer.Len() == 0 && (!firstChunkProcessed || knownTotalChunks == 0) && !foundAnyValidChunk {
-		// This condition means no valid chunks found, and we already exited.
-		// If it somehow reaches here and buffer is empty, it means an empty file was intended.
-		fmt.Printf("Wrote 0 bytes to %s (likely an empty original file).\n", outputFile)
+		fmt.Printf("Wrote %d bytes of decompressed data to %s, BUT THE ORIGINAL COMPRESSED STREAM WAS INCOMPLETE due to missing sequence numbers.\n", len(decompressedData), outputFile)
 	} else {
-		fmt.Printf("Successfully wrote %d bytes of decoded data to %s\n", finalDataBuffer.Len(), outputFile)
+		fmt.Printf("Successfully wrote %d bytes of decompressed data to %s\n", len(decompressedData), outputFile)
 	}
 
 	fmt.Println("Decoder finished.")

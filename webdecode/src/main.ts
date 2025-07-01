@@ -2,6 +2,7 @@
 declare var jsQR: any; // jsQR library
 declare var xxhash: any; // xxhash-wasm library
 declare var CoolAscii85: { decode: (ascii85String: string) => Uint8Array }; // Placeholder for ASCII85 lib
+declare var ZstdDec: { decompress: (compressedData: Uint8Array) => Uint8Array }; // Placeholder for ZSTD lib
 
 // --- DOM Element References ---
 const videoElement = document.getElementById('video') as HTMLVideoElement | null;
@@ -499,33 +500,48 @@ function assembleData() {
         }
     }
 
-    const reassembledData = new Uint8Array(totalSize);
+    const reassembledCompressedData = new Uint8Array(totalSize);
     let currentOffset = 0;
-    for (let i = 0; i <= finalHighestSeqToCheck; i++) {
-        const chunk = collectedChunks.get(i)!; // Safe due to checks above
-        reassembledData.set(chunk, currentOffset);
+    // Iterate up to numChunksToAssemble (which is derived from totalChunksExpected or highestSequenceNumberSeen)
+    for (let i = 0; i < numChunksToAssemble; i++) {
+        const chunk = collectedChunks.get(i)!; // Assumes missing chunks check has passed or is handled
+        reassembledCompressedData.set(chunk, currentOffset);
         currentOffset += chunk.length;
     }
 
-    updateStatus(`Data reassembled. Total size: ${reassembledData.length} bytes.`);
+    updateStatus(`Compressed data reassembled. Total compressed size: ${reassembledCompressedData.length} bytes. Decompressing...`);
+
+    let finalDecompressedData: Uint8Array;
+    try {
+        if (typeof ZstdDec === 'undefined' || typeof ZstdDec.decompress !== 'function') {
+            throw new Error("ZSTD Decompression library (ZstdDec.decompress) not found or not a function.");
+        }
+        finalDecompressedData = ZstdDec.decompress(reassembledCompressedData);
+        updateStatus(`Data decompressed successfully. Original size: ${finalDecompressedData.length} bytes.`);
+    } catch (err: any) {
+        updateStatus(`Error during ZSTD decompression: ${err.message || err}. Displaying raw compressed data instead.`, true);
+        // Fallback to allowing download of the (raw) compressed data if decompression fails
+        finalDecompressedData = reassembledCompressedData; // Or handle differently, e.g., clear outputTextarea
+        outputTextarea.value = "<Error during ZSTD decompression. Raw (compressed) data might be available for download.>";
+    }
+
 
     // Try to display as text (UTF-8)
     try {
-        const textDecoder = new TextDecoder('utf-8', { fatal: true }); // fatal will throw on invalid UTF-8
-        outputTextarea.value = textDecoder.decode(reassembledData);
-        updateStatus("Displayed reassembled data as UTF-8 text.");
+        const textDecoder = new TextDecoder('utf-8', { fatal: true });
+        outputTextarea.value = textDecoder.decode(finalDecompressedData);
+        updateStatus("Displayed final (decompressed) data as UTF-8 text.");
     } catch (e) {
-        updateStatus("Reassembled data is not valid UTF-8 text, or contains null characters. Displaying as hex.", false);
-        // Fallback to hex display if not valid UTF-8 or for binary data
+        updateStatus("Final (decompressed) data is not valid UTF-8 text, or contains null characters. Displaying as hex.", false);
         let hexString = '';
-        for (let i = 0; i < Math.min(reassembledData.length, 1024); i++) { // Preview first 1KB as hex
-            hexString += reassembledData[i].toString(16).padStart(2, '0');
+        for (let i = 0; i < Math.min(finalDecompressedData.length, 1024); i++) {
+            hexString += finalDecompressedData[i].toString(16).padStart(2, '0');
         }
-        outputTextarea.value = hexString + (reassembledData.length > 1024 ? "\n... (data truncated in hex preview)" : "");
+        outputTextarea.value = hexString + (finalDecompressedData.length > 1024 ? "\n... (data truncated in hex preview)" : "");
     }
 
-    // Offer download
-    const blob = new Blob([reassembledData], { type: 'application/octet-stream' });
+    // Offer download of the final (ideally decompressed) data
+    const blob = new Blob([finalDecompressedData], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     downloadLink.href = url;
     downloadLink.download = fileNameInput.value || 'decoded_file';
