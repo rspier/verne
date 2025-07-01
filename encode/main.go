@@ -11,7 +11,6 @@ import (
 	"bytes"           // For bytes.Buffer
 	"encoding/binary" // For converting sequence number to bytes
 	"io"              // For io.Copy
-	"encoding/hex"    // No longer used for QR payload
 	"encoding/ascii85"// For ASCII85 encoding QR payload
 	"image/png"       // For saving QR code as PNG
 	"image"
