@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom'; // Needed because GroupList contains <Link>
-import GroupList from './GroupList.jsx'; // Added .jsx extension
+import GroupList from './GroupList.jsx'; // Explicitly add .jsx
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock react-router-dom's Link component if it causes issues,

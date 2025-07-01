@@ -1,169 +1,200 @@
 package api
 
 import (
+	// "bufio" // No longer needed
 	"encoding/json"
+	"fmt"
+	// "io" // No longer needed
+	"log"
 	"net/http"
+	// "net/textproto" // No longer needed
+	"nntp-browser-app/backend/pkg/config"
 	"nntp-browser-app/backend/pkg/models"
-	"strings"
-	"time"
+	"nntp-browser-app/backend/pkg/nntpclient"
+	"nntp-browser-app/backend/pkg/threading"
+	// "strconv" // No longer needed
+	// "strings" // No longer needed
+	// "time" // No longer needed
 
-	// It's good practice to alias a router if you use one, e.g. "gorilla/mux"
-	// For now, we'll use net/http's default ServeMux which is fine for simple cases.
+	// kclient "github.com/kothawoc/go-nntp/client" // Not directly used by handlers
+	// krootnntp "github.com/kothawoc/go-nntp"
+	"github.com/julienschmidt/httprouter"
 )
 
-// GetGroupsHandler returns a list of mock NNTP groups.
-func GetGroupsHandler(w http.ResponseWriter, r *http.Request) {
-	mockGroups := []models.Group{
-		{Name: "comp.lang.go", Description: "Discussions about Go", Count: 12345, High: 12350, Low: 1},
-		{Name: "alt.humor.puns", Description: "Puns, puns, and more puns", Count: 5678, High: 5680, Low: 10},
-		{Name: "sci.space.news", Description: "Space news and announcements", Count: 91011, High: 91020, Low: 50},
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(mockGroups)
+// APIHandler holds dependencies for API handlers, like an NNTP client.
+type APIHandler struct {
+	nntpClient *nntpclient.NNTPClient
 }
 
-// GetMessagesHandler returns a list of mock messages for a group.
-// Path: /api/groups/{groupName}/messages
-func GetMessagesHandler(w http.ResponseWriter, r *http.Request) {
-	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	// Expected path: api/groups/{groupName}/messages
-	if len(pathParts) < 4 {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
+// NewAPIHandler creates a new APIHandler with an initialized NNTP client.
+func NewAPIHandler(cfg config.AppConfig) (*APIHandler, error) {
+	client, err := nntpclient.New(cfg)
+	if err != nil {
+		log.Printf("Warning: Failed to initialize NNTP client: %v. API might serve errors or limited data.", err)
+		return &APIHandler{nntpClient: nil}, fmt.Errorf("failed to create nntp client: %w", err)
+	}
+	return &APIHandler{nntpClient: client}, nil
+}
+
+// Close cleans up resources used by the APIHandler.
+func (h *APIHandler) Close() {
+	if h.nntpClient != nil {
+		h.nntpClient.Close()
+	}
+}
+
+// GetGroupsHandler fetches and returns a list of NNTP groups.
+func (h *APIHandler) GetGroupsHandler(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	if h.nntpClient == nil {
+		http.Error(w, "NNTP client not available", http.StatusInternalServerError)
 		return
 	}
-	groupName := pathParts[2]
-
-	// TODO: Add pagination and filtering by month based on query params
-	// For now, returning a static list
-
-	mockMessages := []models.MessageOverview{
-		{ID: "<msg1@example.com>", Group: groupName, Number: 101, Subject: "Hello from Go", From: "Go User <go@example.com>", Date: time.Now().Add(-24 * time.Hour), MessageCountInThread: 3},
-		{ID: "<msg2@example.com>", Group: groupName, Number: 102, Subject: "Re: Hello from Go", From: "Another User <another@example.com>", Date: time.Now().Add(-23 * time.Hour), MessageCountInThread: 3},
-		{ID: "<msg3@example.com>", Group: groupName, Number: 103, Subject: "React is cool", From: "React Fan <react@example.com>", Date: time.Now().Add(-22 * time.Hour), MessageCountInThread: 1},
-		{ID: "<msg4@example.com>", Group: groupName, Number: 104, Subject: "Re: Re: Hello from Go", From: "Go User <go@example.com>", Date: time.Now().Add(-21 * time.Hour), MessageCountInThread: 3},
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(mockMessages)
-}
-
-// GetMessageHandler returns a single mock message and its thread context.
-// Path: /api/groups/{groupName}/messages/{messageId}
-func GetMessageHandler(w http.ResponseWriter, r *http.Request) {
-	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	// Expected path: api/groups/{groupName}/messages/{messageId}
-	if len(pathParts) < 5 {
-		http.Error(w, "Invalid path, missing messageId", http.StatusBadRequest)
+	groups, err := h.nntpClient.GetGroups()
+	if err != nil {
+		log.Printf("Error getting groups from NNTP client: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	groupName := pathParts[2]
-	// messageId is URL encoded, but for mock, we'll use it as is.
-	// In a real scenario, you'd URL decode it.
-	messageID := pathParts[4]
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(groups)
+}
 
-	// Mock parent and child for the thread context
-	prevID := "prev-id@example.com"
-	nextID := "next-id@example.com"
-	parentID := "parent-id@example.com"
-
-	mockMessage := models.Message{
-		ID:         messageID,
-		Group:      groupName,
-		Number:     101, // Mock number
-		Subject:    "Example Message: " + messageID,
-		From:       "Mock User <mock@example.com>",
-		Date:       time.Now().Add(-48 * time.Hour),
-		References: []string{"<ref1@example.com>", "<ref2@example.com>"},
-		Body:       "This is the body of the mock message.\n\nIt has multiple lines.",
-		PrevMessage: &prevID,
-		NextMessage: &nextID,
-		Parent: &parentID,
-		Children: []*models.Message{
-			{
-				ID:      nextID,
-				Group:   groupName,
-				Number:  102,
-				Subject: "Re: Example Message",
-				From:    "Child User <child@example.com>",
-				Date:    time.Now().Add(-47 * time.Hour),
-			},
-		},
+// GetMessagesHandler returns a list of messages for a group.
+func (h *APIHandler) GetMessagesHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	if h.nntpClient == nil {
+		http.Error(w, "NNTP client not available", http.StatusInternalServerError)
+		return
 	}
+	groupName := ps.ByName("groupName")
+	if groupName == "" {
+		http.Error(w, "Group name is required", http.StatusBadRequest)
+		return
+	}
+
+	_, low, high, err := h.nntpClient.SelectGroup(groupName)
+	if err != nil {
+		log.Printf("Error selecting group %s: %v", groupName, err)
+		http.Error(w, fmt.Sprintf("Could not select group %s: %s", groupName, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	articleCount := high - low + 1
+	if articleCount <= 0 || high < low {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]models.MessageOverview{})
+		return
+	}
+
+	// Determine fetch range (e.g., last 100 messages)
+	// TODO: Implement proper pagination from query params
+	fetchCount := 100
+	if articleCount < fetchCount {
+		fetchCount = articleCount
+	}
+	startArticleNum := high - fetchCount + 1
+    if startArticleNum < low {
+        startArticleNum = low
+    }
+
+	// Construct article number range for Over command if it takes individual numbers.
+	// kothawoc/go-nntp/client.Over takes ...int.
+	// If we want a range, we need to generate that slice or see if it supports "first-last" string.
+	// The docs `Over(args ...int)` suggests individual numbers or a range passed as two numbers.
+	// Let's assume it takes first, last for a range.
+	// nntpclient.GetArticleOverviews takes (first, last int64) and returns []nntp.MessageOverview (from willglynn/nntp)
+	nntpOverviews, err := h.nntpClient.GetArticleOverviews(int64(startArticleNum), int64(high))
+	if err != nil {
+		log.Printf("Error getting article overviews for group %s: %v", groupName, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+    // Extra brace removed from here
+
+    fullMessagesForThreading := make([]*models.Message, len(nntpOverviews))
+    msgMapForThreading := make(map[string]*models.Message)
+
+    for i, overview := range nntpOverviews {
+        // overview is nntp.MessageOverview from willglynn/nntp
+        // Its fields: MessageNumber int64, Subject string, From string, Date time.Time,
+        // MessageId string, References []string, Bytes int, Lines int
+        // MessageId and References are already trimmed by nntpclient.GetArticleOverviews
+
+        msg := &models.Message{
+            ID:         overview.MessageId,
+            Group:      groupName,
+            Number:     overview.MessageNumber,
+            Subject:    overview.Subject,
+            From:       overview.From,
+            Date:       overview.Date,
+            References: overview.References, // This is already []string
+        }
+        fullMessagesForThreading[i] = msg
+        msgMapForThreading[msg.ID] = msg
+    }
+
+    threading.ThreadMessages(fullMessagesForThreading)
+
+    responseOverviews := make([]models.MessageOverview, len(fullMessagesForThreading))
+    for i, threadedMsg := range fullMessagesForThreading {
+        threadRoot := threading.GetThreadRoot(threadedMsg.ID, msgMapForThreading)
+        threadCount := 0
+        if threadRoot != nil {
+            threadCount = threading.CountMessagesInThread(threadRoot, msgMapForThreading)
+        }
+        responseOverviews[i] = models.MessageOverview{
+            ID:                   threadedMsg.ID,
+            Group:                threadedMsg.Group,
+            Number:               threadedMsg.Number,
+            Subject:              threadedMsg.Subject,
+            From:                 threadedMsg.From,
+            Date:                 threadedMsg.Date,
+            MessageCountInThread: threadCount,
+        }
+    }
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(mockMessage)
+	json.NewEncoder(w).Encode(responseOverviews) // Encode responseOverviews
 }
 
-// Router sets up the routes for the API.
-// It returns an http.Handler, so it can be used with http.ListenAndServe.
-func Router() http.Handler {
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("/api/groups", GetGroupsHandler)
-	// Note: NewServeMux needs more specific path handling for parameters.
-	// A library like gorilla/mux or chi would be better for {groupName} and {messageId}.
-	// For now, we parse the path manually in handlers.
-	// This means /api/groups/{groupName}/messages and /api/groups/{groupName}/messages/{messageId}
-	// will both initially match the most general path registered, so we need to be careful.
-	// A common pattern is to register one handler for a prefix and then delegate.
-	// For simplicity, let's register distinct-enough paths for now,
-	// but this will need refinement or a better router.
-
-	// This will match /api/groups/ANYTHING/messages or /api/groups/ANYTHING/messages/ANYTHING_ELSE
-	// We'll need to distinguish in the handler or use a more capable router.
-	// Let's create a handler that can distinguish.
-
-	// We will create specific handlers for these patterns.
-	// This will require careful path parsing in the handlers.
-	// A more robust solution would involve a router that supports path parameters.
-	// For now, we'll handle it like this:
-	// /api/groups/{groupName}/messages
-	// /api/groups/{groupName}/messages/{messageID}
-
-	// A simple way to handle this with NewServeMux is to have a single handler for a base path
-	// and then parse the rest of the path.
-	// For example, handle all /api/groups/ requests and then determine if it's for messages or a specific message.
-
-	// Let's try registering more specific paths if possible, or use a prefix and parse.
-	// For NewServeMux:
-	// A path ending in / matches all paths that have it as a prefix.
-	// So, /api/groups/ will match /api/groups/comp.lang.go/messages etc.
-
-	groupSpecificHandler := func(w http.ResponseWriter, r *http.Request) {
-		path := strings.TrimPrefix(r.URL.Path, "/api/groups/")
-		parts := strings.Split(path, "/")
-		// parts[0] is groupName
-		// if len(parts) == 2 and parts[1] == "messages", it's GetMessagesHandler
-		// if len(parts) == 3 and parts[1] == "messages", it's GetMessageHandler (parts[2] is messageId)
-
-		if len(parts) >= 2 && parts[1] == "messages" {
-			if len(parts) == 2 { // e.g. /api/groups/groupname/messages
-				GetMessagesHandler(w, r) // It will parse groupName itself
-			} else if len(parts) == 3 { // e.g. /api/groups/groupname/messages/messageid
-				GetMessageHandler(w, r) // It will parse groupName and messageId itself
-			} else {
-				http.NotFound(w, r)
-			}
-		} else {
-			http.NotFound(w, r)
-		}
+// GetMessageHandler returns a single message and its thread context.
+func (h *APIHandler) GetMessageHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	if h.nntpClient == nil {
+		http.Error(w, "NNTP client not available", http.StatusInternalServerError)
+		return
 	}
+	groupName := ps.ByName("groupName")
+	messageIDFromPath := ps.ByName("messageId")
 
-	mux.HandleFunc("/api/groups/", func(w http.ResponseWriter, r *http.Request) {
-		// If path is exactly /api/groups or /api/groups/
-		if r.URL.Path == "/api/groups" || r.URL.Path == "/api/groups/" {
-			if r.Method == http.MethodGet {
-				GetGroupsHandler(w, r)
-			} else {
-				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			}
-			return
-		}
-		// Otherwise, it's for a specific group's messages or a single message
-		groupSpecificHandler(w,r)
-	})
+	// nntpclient.GetArticleBody now returns *models.Message (already parsed)
+	responseMessage, err := h.nntpClient.GetArticleBody(messageIDFromPath)
+	if err != nil {
+		log.Printf("Error getting article body for ID %s in group %s: %v", messageIDFromPath, groupName, err)
+		http.Error(w, fmt.Sprintf("Could not get article %s: %s", messageIDFromPath, err.Error()), http.StatusNotFound)
+		return
+	}
+    responseMessage.Group = groupName // Ensure group is set
 
+	// TODO: Full thread context (Parent, Children, Next/Prev) for responseMessage
+	// This would involve fetching more messages based on responseMessage.References,
+	// messages that reference it, etc., and then applying threading.
+	// For now, these fields will be empty/nil in responseMessage as filled by GetArticleBody.
 
-	return mux
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(responseMessage)
 }
+
+// Router initializes and returns the HTTP router for the API.
+func Router(apiHandler *APIHandler) *httprouter.Router {
+	router := httprouter.New()
+	router.GET("/api/groups", apiHandler.GetGroupsHandler)
+	router.GET("/api/groups/:groupName/messages", apiHandler.GetMessagesHandler)
+	router.GET("/api/groups/:groupName/messages/:messageId", apiHandler.GetMessageHandler)
+	return router
+}
+
+// Ensure kclient and krootnntp are imported if their types are used directly here.
+// For now, they are encapsulated in nntpclient results or models.
+// var _ = kclient.OverItem{} // kclient import removed
+// var _ = krootnntp.Group{}
+// var _ = bufio.NewReader(nil) // bufio import removed
+// var _ = textproto.NewReader(nil) // textproto import removed

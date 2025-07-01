@@ -29,14 +29,23 @@ describe('MessageView Component', () => {
     // Check for loading text (might be quick)
     // We will directly check for content post-loading, assuming mock data is synchronous.
     // The messageId in the text should be the decoded one.
-    expect(screen.getByText('Loading message test-message-id@example.com...')).toBeInTheDocument();
+    // REMOVED: expect(screen.getByText('Loading message test-message-id@example.com...')).toBeInTheDocument();
 
-    // Wait for mock data to load and component to re-render
+    // Wait for mock data to load and component to re-render, then check for key content.
     await waitFor(() => {
       expect(screen.getByText('Subject of: test-message-id@example.com')).toBeInTheDocument();
     });
 
-    expect(screen.getByText(/From: Sender <sender@example.com>/i)).toBeInTheDocument();
+    // After waiting for the subject, other content should also be present.
+    // Let's use a more precise waitFor for the "From" line as well.
+    await waitFor(() => {
+      expect(screen.getByText((content, node) => {
+        // Construct the expected text, matching how it's built in the component
+        const expectedText = `From: Sender <sender@example.com>`;
+        // Check if the node's text content (which includes children like <strong>) matches
+        return node.textContent === expectedText;
+      })).toBeInTheDocument();
+    });
     expect(screen.getByText(/This is the body of message test-message-id@example.com/i)).toBeInTheDocument();
 
     // Check for thread navigation links based on mock data

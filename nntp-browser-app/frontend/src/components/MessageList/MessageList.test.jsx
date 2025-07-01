@@ -35,16 +35,15 @@ describe('MessageList Component', () => {
         expect(screen.getByText(/First message in test.group/i)).toBeInTheDocument();
     });
 
-    // For "Another interesting topic", ensure we get the one that is not a reply, if needed,
-    // or check that multiple related entries might exist.
-    // Using getAllByText to acknowledge multiple matches are possible with the simple regex.
-    const topicMessages = screen.getAllByText(/Another interesting topic/i);
-    expect(topicMessages.length).toBeGreaterThanOrEqual(1); // At least one should be the original
-    // If we want to specifically find the one that is NOT a reply:
-    // expect(screen.getByText((content, element) => {
-    //   return content.startsWith("Another interesting topic") && element.classList.contains('message-subject');
-    // })).toBeInTheDocument();
-
+    // Specifically find the message subject "Another interesting topic" (not the "Re:" one)
+    // by ensuring the text is exactly "Another interesting topic"
+    expect(screen.getByText((content, element) => {
+        // Check that the text content is exactly "Another interesting topic"
+        // and that it's a span with the class 'message-subject' to be more specific
+        return content === "Another interesting topic" &&
+               element.tagName.toLowerCase() === 'span' &&
+               element.classList.contains('message-subject');
+      })).toBeInTheDocument();
 
     // Check for links to messages (ensure IDs are handled)
     // The mock messages have IDs like "msg1@example.com"

@@ -12,29 +12,29 @@ const MessageList = () => {
   useEffect(() => {
     setLoading(true);
     setError(null);
-    // Mock data for now
-    const mockMessages = [
-      { id: "msg1@example.com", group: groupName, number: 1, subject: "First message in " + groupName, from: "User1 <user1@example.com>", date: new Date(Date.now() - 86400000).toISOString(), messageCountInThread: 1 },
-      { id: "msg2@example.com", group: groupName, number: 2, subject: "Another interesting topic", from: "User2 <user2@example.com>", date: new Date(Date.now() - 172800000).toISOString(), messageCountInThread: 3 },
-      { id: "msg3@example.com", group: groupName, number: 3, subject: "Re: Another interesting topic", from: "User1 <user1@example.com>", date: new Date(Date.now() - 170000000).toISOString(), messageCountInThread: 3 },
-    ];
-    setMessages(mockMessages);
-    setLoading(false);
-
-    // Actual API call will be like:
-    // fetch(`/api/groups/${groupName}/messages`) // Add query params for pagination/filters
-    //   .then(response => {
-    //     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    //     return response.json();
-    //   })
-    //   .then(data => {
-    //     setMessages(data);
-    //     setLoading(false);
-    //   })
-    //   .catch(err => {
-    //     setError(err.message);
-    //     setLoading(false);
-    //   });
+    // Fetch from backend API
+    // Note: groupName comes from useParams and should be safe for URL path.
+    // If groupName could contain special characters that need encoding for a URL path segment,
+    // ensure it's encoded if not already handled by react-router. Typically, useParams provides decoded values.
+    fetch(`http://localhost:8080/api/groups/${groupName}/messages`) // Add query params for pagination/filters later
+      .then(response => {
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        return response.json();
+      })
+      .then(data => {
+        // The backend's mock message IDs are like "<msg1@example.com>"
+        // For use in URLs, these should be URL encoded. The MessageList component already does this
+        // when creating links: `/groups/${groupName}/messages/${encodeURIComponent(msg.id)}`
+        // So, the `id` field from the backend can be used directly here.
+        // If the backend already URL-encodes them, ensure consistency.
+        // The current mock backend sends them as plain strings.
+        setMessages(data);
+        setLoading(false);
+      })
+      .catch(err => {
+        setError(err.message);
+        setLoading(false);
+      });
   }, [groupName]); // Reload if groupName changes
 
   if (loading) return <p>Loading messages for {groupName}...</p>;
