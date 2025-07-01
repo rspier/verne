@@ -35,20 +35,6 @@ let h64: any = null;
 // --- Utility Functions (to be filled in later or moved to utils.ts) ---
 
 /**
- * Converts a hex string to a Uint8Array.
- */
-function hexToBytes(hex: string): Uint8Array {
-    if (hex.length % 2 !== 0) {
-        throw new Error("Hex string must have an even number of characters.");
-    }
-    const bytes = new Uint8Array(hex.length / 2);
-    for (let i = 0; i < hex.length; i += 2) {
-        bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
-    }
-    return bytes;
-}
-
-/**
  * Reads a Big Endian Uint32 from a Uint8Array at a given offset.
  */
 function bytesToUint32BE(bytes: Uint8Array, offset: number = 0): number {
@@ -316,79 +302,103 @@ function processFrame() {
             updateStatus(`Frame ${frameCounter}: QR found. Processing data (Scan: ${scanDuration.toFixed(1)}ms)...`);
             t4 = performance.now();
 
-            const hexPayload = code.data;
+            const base64Payload = code.data;
             let finalPayloadBytes: Uint8Array;
             try {
-                finalPayloadBytes = hexToBytes(hexPayload);
+                // Decode Base64
+                const binaryString = atob(base64Payload);
+                finalPayloadBytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    finalPayloadBytes[i] = binaryString.charCodeAt(i);
+                }
             } catch (e: any) {
                 t5 = performance.now(); // Still record time up to the error
                 dataProcessingDuration = t5 - t4;
-                updateStatus(`Frame ${frameCounter}: Error hex-decoding payload: ${e.message} (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
+                updateStatus(`Frame ${frameCounter}: Error Base64-decoding payload: ${e.message} (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
                 timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms (ERR), Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
                 return;
             }
 
-            if (finalPayloadBytes.length < 16) { // Minimum header size
+            const HEADER_SIZE = 20; // New header size
+
+            if (finalPayloadBytes.length < HEADER_SIZE) {
                 t5 = performance.now();
                 dataProcessingDuration = t5 - t4;
-                updateStatus(`Frame ${frameCounter}: Payload too short (${finalPayloadBytes.length}B) (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
+                updateStatus(`Frame ${frameCounter}: Payload too short (${finalPayloadBytes.length}B, need ${HEADER_SIZE}) (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
                 timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms (ERR), Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
                 return;
             }
 
-            const headerChecksum = bytesToUint64BE(finalPayloadBytes, 0);
-            const sequenceNum = bytesToUint32BE(finalPayloadBytes, 8);
-            const dataLength = bytesToUint32BE(finalPayloadBytes, 12);
+            // Parse new header: Checksum (8B), TotalChunks (4B), SequenceNum (4B), DataLength (4B)
+            const headerChecksum = bytesToUint64BE(finalPayloadBytes, 0);    // Offset 0
+            const totalChunks = bytesToUint32BE(finalPayloadBytes, 8);       // Offset 8
+            const sequenceNum = bytesToUint32BE(finalPayloadBytes, 12);      // Offset 12
+            const dataLength = bytesToUint32BE(finalPayloadBytes, 16);       // Offset 16
 
-            if (16 + dataLength > finalPayloadBytes.length) {
+            if (HEADER_SIZE + dataLength > finalPayloadBytes.length) {
                 t5 = performance.now();
                 dataProcessingDuration = t5 - t4;
-                updateStatus(`Frame ${frameCounter}: Header dataLength mismatch (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
+                updateStatus(`Frame ${frameCounter}: Header dataLength mismatch (payload ${finalPayloadBytes.length}B, header ${HEADER_SIZE}B, data ${dataLength}B) (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
                 timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms (ERR), Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
                 return;
             }
-            const originalChunkData = finalPayloadBytes.slice(16, 16 + dataLength);
+            const originalChunkData = finalPayloadBytes.slice(HEADER_SIZE, HEADER_SIZE + dataLength);
 
-            const checksumDataBuffer = new Uint8Array(4 + 4 + originalChunkData.length);
+            // Checksum data: TotalChunks (4B) + SequenceNum (4B) + DataLength (4B) + OriginalData
+            const checksumDataBuffer = new Uint8Array(4 + 4 + 4 + originalChunkData.length);
             const view = new DataView(checksumDataBuffer.buffer);
-            view.setUint32(0, sequenceNum, false);
-            view.setUint32(4, dataLength, false);
-            checksumDataBuffer.set(originalChunkData, 8);
+            view.setUint32(0, totalChunks, false);      // TotalChunks
+            view.setUint32(4, sequenceNum, false);      // SequenceNum
+            view.setUint32(8, dataLength, false);     // DataLength
+            checksumDataBuffer.set(originalChunkData, 12); // OriginalData starts after 12 bytes of these fields
 
             const calculatedChecksumBigInt = h64().update(checksumDataBuffer).digest('bigint');
 
             if (calculatedChecksumBigInt !== headerChecksum) {
                 t5 = performance.now();
                 dataProcessingDuration = t5 - t4;
-                updateStatus(`Frame ${frameCounter}: Checksum mismatch for Seq ${sequenceNum} (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
+                updateStatus(`Frame ${frameCounter}: Checksum mismatch for Seq ${sequenceNum} (Total ${totalChunks}) (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
                 timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms (ERR), Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
                 return;
+            }
+
+            // --- Utilize totalChunks ---
+            if (totalChunksExpected === -1) { // First valid chunk sets the expectation
+                totalChunksExpected = totalChunks;
+                if (totalChunksExpected === 0) { // Should not happen from new encoder for non-empty files
+                     updateStatus(`Warning: Frame ${frameCounter}, Seq ${sequenceNum}: Header reports TotalChunks as 0. This is unexpected.`, false);
+                }
+                console.log(`Total chunks expected set to: ${totalChunksExpected} from chunk ${sequenceNum}`);
+            } else if (totalChunks !== totalChunksExpected) {
+                // This is a critical inconsistency
+                t5 = performance.now();
+                dataProcessingDuration = t5 - t4;
+                updateStatus(`CRITICAL ERROR: Frame ${frameCounter}, Seq ${sequenceNum}: Inconsistent TotalChunks! Expected ${totalChunksExpected}, got ${totalChunks}. Halting. (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
+                timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms (CRIT_ERR), Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
+                stopCapture(); // Stop capture due to inconsistent stream
+                return;
+            }
+
+            // Validate sequenceNum against totalChunksExpected (if known and > 0)
+            if (totalChunksExpected > 0 && sequenceNum >= totalChunksExpected) {
+                t5 = performance.now();
+                dataProcessingDuration = t5 - t4;
+                updateStatus(`Error: Frame ${frameCounter}, Seq ${sequenceNum}: Sequence number out of bounds (TotalChunks: ${totalChunksExpected}). (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
+                timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms (ERR_BOUNDS), Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
+                return; // Discard this chunk
             }
 
             if (!collectedChunks.has(sequenceNum)) {
                 collectedChunks.set(sequenceNum, originalChunkData);
                 if (sequenceNum > highestSequenceNumberSeen) {
-                    highestSequenceNumberSeen = sequenceNum;
+                    highestSequenceNumberSeen = sequenceNum; // Still track highest for fallback/logging
                 }
-                // Final chunk detection logic (remains the same)
-                if (totalChunksExpected !== -1 && sequenceNum >= totalChunksExpected) {
-                    updateStatus(`Info: Chunk ${sequenceNum} received after a presumed final chunk. Resetting total expected chunks.`, false);
-                    totalChunksExpected = -1;
-                    if (statusOutput && statusOutput.style.color === 'green') {
-                        statusOutput.style.color = 'black';
-                    }
-                }
-                if (totalChunksExpected === -1 && dataLength < presumedEncoderChunkSize) {
-                    totalChunksExpected = sequenceNum + 1;
-                } else if (totalChunksExpected !== -1 && dataLength < presumedEncoderChunkSize && (sequenceNum + 1) < totalChunksExpected) {
-                     updateStatus(`Info: A new, earlier short chunk ${sequenceNum} detected. Updating total expected from ${totalChunksExpected} to ${sequenceNum + 1}.`, false);
-                    totalChunksExpected = sequenceNum + 1;
-                }
-                updateReceivedSequenceDisplay(); // This might update statusOutput too
+                updateReceivedSequenceDisplay();
             }
+
             t5 = performance.now();
             dataProcessingDuration = t5 - t4;
-            updateStatus(`Frame ${frameCounter}: Chunk ${sequenceNum} (len ${dataLength}) OK. (DataProc: ${dataProcessingDuration.toFixed(1)}ms) Total unique: ${collectedChunks.size}.`);
+            updateStatus(`Frame ${frameCounter}: Chunk ${sequenceNum} (of ${totalChunksExpected > 0 ? totalChunksExpected : '?'}, len ${dataLength}) OK. (DataProc: ${dataProcessingDuration.toFixed(1)}ms) Total unique: ${collectedChunks.size}.`);
             timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms, Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
 
         } else { // No QR code found
@@ -420,37 +430,46 @@ function assembleData() {
 
     updateStatus(`Assembling ${collectedChunks.size} collected chunks... Highest sequence seen: ${highestSequenceNumberSeen}.`);
 
-    const expectedCount = totalChunksExpected !== -1 ? totalChunksExpected : highestSequenceNumberSeen + 1;
-    const finalHighestSeqToCheck = totalChunksExpected !== -1 ? totalChunksExpected - 1 : highestSequenceNumberSeen;
+    let numChunksToAssemble = 0;
+    if (totalChunksExpected > 0) {
+        numChunksToAssemble = totalChunksExpected;
+        updateStatus(`Assembling based on header TotalChunks: ${numChunksToAssemble}. Collected: ${collectedChunks.size}.`);
+        if (collectedChunks.size < numChunksToAssemble) {
+            updateStatus(`Warning: Not all expected chunks received. Expected ${numChunksToAssemble}, Got ${collectedChunks.size}. Assembling what's available.`, true);
+        }
+    } else {
+        // Fallback if totalChunksExpected was not set (e.g. old format, or header TotalChunks was 0)
+        numChunksToAssemble = highestSequenceNumberSeen + 1;
+        if (numChunksToAssemble === 0 && collectedChunks.size > 0) { // only one chunk, seq 0
+            numChunksToAssemble = 1;
+        }
+        updateStatus(`TotalChunks not definitively known from header. Assembling up to highest seen sequence ${highestSequenceNumberSeen} (implying ${numChunksToAssemble} chunks). Collected: ${collectedChunks.size}.`, false);
+    }
 
-    if (totalChunksExpected !== -1 && collectedChunks.size < totalChunksExpected) {
-        updateStatus(`Attempting to assemble, but not all expected chunks received. Expected ${totalChunksExpected}, Got ${collectedChunks.size}.`, true);
-        // Proceeding anyway, but user should be aware.
+    if (numChunksToAssemble === 0 && collectedChunks.size === 0) { // Handles case where highestSequenceNumberSeen = -1
+        updateStatus("No data chunks collected to assemble.", false);
+        outputTextarea.value = "<No data collected>";
+        progressOverview.textContent = "No chunks collected.";
+        downloadLink.style.display = 'none';
+        return;
     }
 
 
-    // Check for missing chunks up to the finalHighestSeqToCheck
+    // Check for missing chunks up to numChunksToAssemble - 1
     let missingChunksExist = false;
     let firstMissing = -1;
-    if (expectedCount > 0) { // Only check if we expect at least one chunk
-        for (let i = 0; i <= finalHighestSeqToCheck; i++) {
-            if (!collectedChunks.has(i)) {
-                missingChunksExist = true;
-                firstMissing = i;
-                updateStatus(`Missing chunk with sequence number: ${i}`, true);
-                break; // Stop at first missing for this message
-            }
+    for (let i = 0; i < numChunksToAssemble; i++) {
+        if (!collectedChunks.has(i)) {
+            missingChunksExist = true;
+            firstMissing = i;
+            updateStatus(`Error: Missing chunk with sequence number: ${i}`, true);
+            break;
         }
-    } else if (collectedChunks.size === 0 && expectedCount === 0) {
-         // This case might happen if totalChunksExpected was set to 0 (e.g. an empty file was encoded)
-         // For now, this results in "No data collected" earlier. If an empty file result is desired,
-         // this logic might need adjustment.
     }
 
-
     if (missingChunksExist) {
-        progressOverview.textContent = `Data assembly incomplete. Missing chunk(s) (e.g., seq ${firstMissing}). Collected ${collectedChunks.size} of ${expectedCount}.`;
-        outputTextarea.value = `<Incomplete data: Missing chunk(s) up to sequence ${finalHighestSeqToCheck}. First missing: ${firstMissing}.>`;
+        progressOverview.textContent = `Data assembly incomplete. Missing chunk(s) (e.g., seq ${firstMissing}). Collected ${collectedChunks.size} of expected ${numChunksToAssemble}.`;
+        outputTextarea.value = `<Incomplete data: Missing chunk(s). First missing: ${firstMissing}. Expected ${numChunksToAssemble} total.>`;
         downloadLink.style.display = 'none';
         // Optionally, could still offer to assemble what we have. For now, require all up to expected.
         return;

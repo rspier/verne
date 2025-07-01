@@ -13,7 +13,7 @@ import (
 	_ "image/png" // Needed for image.Decode to recognize PNGs
 	"sort"
 	"encoding/binary" // For parsing sequence number and checksum
-	"encoding/hex"    // For hex decoding
+	"encoding/base64" // For Base64 decoding
 	"bytes"           // For bytes.Buffer
 	"io"              // For io.ReadFull
 
@@ -25,14 +25,17 @@ import (
 // ChunkHeader defines the metadata prepended to each data chunk.
 // Note: The order of fields matters for serialization.
 // This must be identical to the definition in the encoder.
+// Order: Checksum, TotalChunks, SequenceNum, DataLength
 type ChunkHeader struct {
-	Checksum    uint64 // XXH64 checksum of (SequenceNum (4B) + DataLength (4B) + OriginalData)
-	SequenceNum uint32 // Sequence number of the chunk
-	DataLength  uint32 // Length of the OriginalData part
+	Checksum    uint64 // XXH64 checksum
+	TotalChunks uint32 // Total number of chunks in the transmission
+	SequenceNum uint32 // Sequence number of this chunk (0-indexed)
+	DataLength  uint32 // Length of the OriginalData part of this chunk
 }
 
-// Actual size of header when serialized: 8 (Checksum) + 4 (SequenceNum) + 4 (DataLength) = 16 bytes
-const newHeaderSize = 16
+// Actual size of header when serialized:
+// 8 (Checksum) + 4 (TotalChunks) + 4 (SequenceNum) + 4 (DataLength) = 20 bytes
+const newHeaderSize = 20
 
 var (
 	inputFile         string
@@ -185,8 +188,9 @@ func main() {
 	// seenRawPayloads helps in quickly skipping already processed identical raw QR payloads
 	// that might appear on consecutive frames for the same data chunk.
 	seenRawPayloads := make(map[string]bool)
-	var maxSequenceNum uint32 = 0 // Keep track of the highest sequence number encountered for ordered reconstruction.
-	                               // Initialized to 0, assuming sequence numbers are >= 0.
+	var maxSequenceNum uint32 = 0 // Keep track of the highest sequence number encountered.
+	var knownTotalChunks uint32 = 0 // Will be set from the first valid chunk's header.
+	firstChunkProcessed := false
 	foundAnyValidChunk := false
 
 	for frameIdx, framePath := range extractedFrames {
@@ -218,25 +222,24 @@ func main() {
 			continue
 		}
 
-		// Encoder now writes a hex string into the QR code.
-		// Decoder should retrieve this as text.
-		hexStringFromQR := result.GetText()
+		// Encoder now writes a Base64 string into the QR code.
+		base64StringFromQR := result.GetText()
 
-		// Deduplicate based on the hex string content of the QR code
-		if _, seen := seenRawPayloads[hexStringFromQR]; seen {
-			// fmt.Printf("Frame %d (%s): Duplicate raw QR payload (hex string) already processed. Skipping.\n", frameIdx+1, filepath.Base(framePath))
+		// Deduplicate based on the Base64 string content of the QR code
+		if _, seen := seenRawPayloads[base64StringFromQR]; seen {
+			// fmt.Printf("Frame %d (%s): Duplicate raw QR payload (Base64 string) already processed. Skipping.\n", frameIdx+1, filepath.Base(framePath))
 			continue
 		}
-		seenRawPayloads[hexStringFromQR] = true // Mark this raw payload as processed.
+		seenRawPayloads[base64StringFromQR] = true // Mark this raw payload as processed.
 
-		// Hex-decode the content
-		rawPayloadBytes, err := hex.DecodeString(hexStringFromQR)
+		// Base64-decode the content
+		rawPayloadBytes, err := base64.StdEncoding.DecodeString(base64StringFromQR)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s): Failed to hex-decode QR content: %v. Content: '%s'. Skipping.\n", frameIdx+1, filepath.Base(framePath), err, hexStringFromQR)
+			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s): Failed to Base64-decode QR content: %v. Content: '%s'. Skipping.\n", frameIdx+1, filepath.Base(framePath), err, base64StringFromQR)
 			continue
 		}
 
-		if len(rawPayloadBytes) < newHeaderSize {
+		if len(rawPayloadBytes) < newHeaderSize { // newHeaderSize is now 20
 			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s): Decoded QR payload too short (%d bytes) for header. Min required: %d. Skipping.\n", frameIdx+1, filepath.Base(framePath), len(rawPayloadBytes), newHeaderSize)
 			continue
 		}
@@ -261,28 +264,48 @@ func main() {
 			continue
 		}
 
-		// Verify checksum: Checksum covers SequenceNum (4B) + DataLength (4B) + OriginalData
-		headerForChecksumBytes := make([]byte, 4+4)
-		binary.BigEndian.PutUint32(headerForChecksumBytes[0:4], header.SequenceNum)
-		binary.BigEndian.PutUint32(headerForChecksumBytes[4:8], header.DataLength)
+		// Verify checksum: Checksum covers TotalChunks (4B) + SequenceNum (4B) + DataLength (4B) + OriginalData
+		headerFieldsForChecksumBytes := make([]byte, 4+4+4) // For TotalChunks, SequenceNum, DataLength
+		binary.BigEndian.PutUint32(headerFieldsForChecksumBytes[0:4], header.TotalChunks)
+		binary.BigEndian.PutUint32(headerFieldsForChecksumBytes[4:8], header.SequenceNum)
+		binary.BigEndian.PutUint32(headerFieldsForChecksumBytes[8:12], header.DataLength)
 
-		dataThatWasChecksummed := append(headerForChecksumBytes, originalData...)
+		dataThatWasChecksummed := append(headerFieldsForChecksumBytes, originalData...)
 		calculatedChecksum := xxhash.Sum64(dataThatWasChecksummed)
 
 		if calculatedChecksum != header.Checksum {
-			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s), Seq %d: Checksum mismatch! Expected %016x, got %016x. Discarding chunk.\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum, header.Checksum, calculatedChecksum)
+			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s), Seq %d, Total %d: Checksum mismatch! Expected %016x, got %016x. Discarding chunk.\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum, header.TotalChunks, header.Checksum, calculatedChecksum)
 			continue
 		}
 
 		foundAnyValidChunk = true
-		if _, exists := decodedChunks[header.SequenceNum]; !exists {
-			decodedChunks[header.SequenceNum] = originalData
-			fmt.Printf("Frame %d (%s): Stored Seq %d, Checksum OK. Data len: %d.\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum, len(originalData))
-		} else {
-			// Data for this sequence number already exists. For now, first one wins.
-			fmt.Printf("Frame %d (%s): Seq %d (Checksum OK) already stored. Ignoring duplicate.\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum)
+
+		if !firstChunkProcessed {
+			knownTotalChunks = header.TotalChunks
+			if knownTotalChunks == 0 { // This case should ideally not occur with the new encoder for non-empty files
+				fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s), Seq %d: Header reports TotalChunks as 0. Assembly will rely on max seen sequence number if this persists.\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum)
+			}
+			firstChunkProcessed = true
+			fmt.Printf("Frame %d (%s): First valid chunk. Expecting %d total chunks (Seq %d, DataLen %d).\n", frameIdx+1, filepath.Base(framePath), knownTotalChunks, header.SequenceNum, header.DataLength)
+		} else if header.TotalChunks != knownTotalChunks {
+			fmt.Fprintf(os.Stderr, "CRITICAL ERROR: Frame %d (%s), Seq %d: Inconsistent TotalChunks in header! Expected %d (from first chunk), got %d. Halting processing.\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum, knownTotalChunks, header.TotalChunks)
+			os.Exit(1) // Exit due to corrupted/inconsistent stream
 		}
 
+		// Validate sequence number if knownTotalChunks is set and > 0
+		if knownTotalChunks > 0 && header.SequenceNum >= knownTotalChunks {
+			fmt.Fprintf(os.Stderr, "Error: Frame %d (%s): Sequence number %d is out of bounds (TotalChunks: %d). Discarding chunk.\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum, knownTotalChunks)
+			continue // Skip this invalid chunk
+		}
+
+		if _, exists := decodedChunks[header.SequenceNum]; !exists {
+			decodedChunks[header.SequenceNum] = originalData
+			fmt.Printf("Frame %d (%s): Stored Seq %d (of %d), Checksum OK. Data len: %d. Total unique: %d\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum, knownTotalChunks, len(originalData), len(decodedChunks))
+		} else {
+			// fmt.Printf("Frame %d (%s): Seq %d (Checksum OK) already stored. Ignoring duplicate.\n", frameIdx+1, filepath.Base(framePath), header.SequenceNum)
+		}
+
+		// Update maxSequenceNum for fallback assembly if knownTotalChunks remains 0
 		if header.SequenceNum > maxSequenceNum {
 			maxSequenceNum = header.SequenceNum
 		}
@@ -290,7 +313,6 @@ func main() {
 
 	if !foundAnyValidChunk {
 		fmt.Println("No valid QR code chunks were successfully decoded from any frames.")
-		// Write an empty output file.
 		if writeErr := os.WriteFile(outputFile, []byte{}, 0644); writeErr != nil {
 			fmt.Fprintf(os.Stderr, "Error writing empty output file %s: %v\n", outputFile, writeErr)
 			os.Exit(1)
@@ -299,27 +321,44 @@ func main() {
 		os.Exit(0)
 	}
 
-	fmt.Printf("Total unique, valid QR data chunks to assemble: %d (highest sequence number seen: %d)\n", len(decodedChunks), maxSequenceNum)
-
-	// --- Data Aggregation and Output ---
-	var finalDataBuffer bytes.Buffer // Use bytes.Buffer for efficient concatenation
-	missingSequences := false
-	for i := uint32(0); i <= maxSequenceNum; i++ {
-		chunkData, ok := decodedChunks[i]
-		if !ok {
-			fmt.Fprintf(os.Stderr, "Error: Missing data chunk for sequence number %d.\n", i)
-			missingSequences = true
-		} else {
-			finalDataBuffer.Write(chunkData)
+	// Determine the number of chunks to assemble
+	numChunksToAssemble := knownTotalChunks
+	if !firstChunkProcessed || knownTotalChunks == 0 { // If no valid header set knownTotalChunks, or it was 0
+		fmt.Fprintf(os.Stderr, "Warning: Total number of chunks not definitively known from headers (or was 0). Assembling based on highest sequence number seen: %d.\n", maxSequenceNum)
+		numChunksToAssemble = maxSequenceNum + 1
+		if !foundAnyValidChunk { // If no chunks at all, numChunksToAssemble would be 1 from maxSequenceNum=0
+		    numChunksToAssemble = 0
 		}
 	}
 
+	fmt.Printf("Attempting to assemble %d chunks. Unique chunks found: %d.\n", numChunksToAssemble, len(decodedChunks))
+
+	// --- Data Aggregation and Output ---
+	var finalDataBuffer bytes.Buffer
+	missingSequences := false
+	if numChunksToAssemble == 0 && len(decodedChunks) == 0 {
+		fmt.Println("No data to assemble.")
+	} else {
+		for i := uint32(0); i < numChunksToAssemble; i++ {
+			chunkData, ok := decodedChunks[i]
+			if !ok {
+				fmt.Fprintf(os.Stderr, "Error: Missing data chunk for sequence number %d (expected %d total).\n", i, numChunksToAssemble)
+				missingSequences = true
+			} else {
+				finalDataBuffer.Write(chunkData)
+			}
+		}
+	}
+
+
 	if missingSequences {
-		fmt.Fprintf(os.Stderr, "Critical Error: One or more data chunks were missing. The decoded data is incomplete and likely corrupted. Output file will not be written or will be incomplete.\n")
-		// Decide on behavior: exit, or write partial data.
-		// For now, let's write what we have but ensure the user knows it's bad.
-		// To prevent writing corrupted data, uncomment os.Exit(1)
-		// os.Exit(1)
+		fmt.Fprintf(os.Stderr, "Critical Error: One or more data chunks were missing. The decoded data is incomplete and likely corrupted.\n")
+		// Optional: Could write partial data, but for now, let's emphasize the error.
+		// To strictly prevent writing incomplete data if any chunk is missing based on knownTotalChunks:
+		if firstChunkProcessed && knownTotalChunks > 0 { // Only be this strict if we had a valid TotalChunks count
+			fmt.Println("Output file will not be written due to missing chunks based on header's TotalChunks count.")
+			os.Exit(1)
+		}
 	}
 
 	err = os.WriteFile(outputFile, finalDataBuffer.Bytes(), 0644)
@@ -329,7 +368,11 @@ func main() {
 	}
 
 	if missingSequences {
-		fmt.Printf("Wrote %d bytes to %s, but the data is incomplete due to missing sequence numbers.\n", finalDataBuffer.Len(), outputFile)
+		fmt.Printf("Wrote %d bytes to %s, BUT THE DATA IS INCOMPLETE due to missing sequence numbers.\n", finalDataBuffer.Len(), outputFile)
+	} else if finalDataBuffer.Len() == 0 && (!firstChunkProcessed || knownTotalChunks == 0) && !foundAnyValidChunk {
+		// This condition means no valid chunks found, and we already exited.
+		// If it somehow reaches here and buffer is empty, it means an empty file was intended.
+		fmt.Printf("Wrote 0 bytes to %s (likely an empty original file).\n", outputFile)
 	} else {
 		fmt.Printf("Successfully wrote %d bytes of decoded data to %s\n", finalDataBuffer.Len(), outputFile)
 	}
