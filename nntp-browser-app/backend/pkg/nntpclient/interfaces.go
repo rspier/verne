@@ -6,10 +6,10 @@ import (
 	"strings"         // For mock
 	"time"
 
-	"github.com/willglynn/nntp" // Using willglynn/nntp
+	"github.com/rspier/wgnntp" // Using rspier/wgnntp fork
 )
 
-// NNTPConnection defines the interface for NNTP commands we'll use from willglynn/nntp.
+// NNTPConnection defines the interface for NNTP commands we'll use from rspier/wgnntp.
 type NNTPConnection interface {
 	// Group operations
 	List(args ...string) ([]*nntp.Group, error)           // (c *Conn) List(a ...string) ([]*Group, error)

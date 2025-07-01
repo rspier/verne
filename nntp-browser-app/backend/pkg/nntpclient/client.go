@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willglynn/nntp"
+	"github.com/rspier/wgnntp" // Using rspier/wgnntp fork
 )
 
-// NNTPClient wraps the willglynn/nntp.Conn.
+// NNTPClient wraps the rspier/wgnntp.Conn.
 type NNTPClient struct {
 	Conn   NNTPConnection
 	Config config.AppConfig

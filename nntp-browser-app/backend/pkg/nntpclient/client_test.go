@@ -11,8 +11,8 @@ import (
 	"time"
 	"fmt"
 
-	"nntp-browser-app/backend/pkg/models" // Added models import
-	"github.com/willglynn/nntp"
+	"nntp-browser-app/backend/pkg/models"
+	"github.com/rspier/wgnntp" // Using rspier/wgnntp fork
 )
 
 func TestNNTPClient_GetGroups_Success(t *testing.T) {

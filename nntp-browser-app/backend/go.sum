@@ -4,5 +4,5 @@ github.com/julienschmidt/httprouter v1.3.0 h1:U0609e9tgbseu3rBINet9P48AI/D3oJs4d
 github.com/julienschmidt/httprouter v1.3.0/go.mod h1:JR6WtHb+2LUe8TCKY3cZOxFyyO8IZAc4RVcycCCAKdM=
 github.com/rs/cors v1.11.1 h1:eU3gRzXLRK57F5rKMGMZURNdIG4EoAmX8k94r9wXWHA=
 github.com/rs/cors v1.11.1/go.mod h1:XyqrcTp5zjWr1wsJ8PIRZssZ8b/WMcMf71DJnit4EMU=
-github.com/willglynn/nntp v0.0.0-20141028183654-faf514d19a62 h1:vBbKc13NYH/qPPGae8GC6ZeOYUuaLPs2h6AlC4so1XI=
-github.com/willglynn/nntp v0.0.0-20141028183654-faf514d19a62/go.mod h1:XTF7qVyoc+UAmskPaMpzaJzYT9cHAwec6WsiIE3OHOs=
+github.com/rspier/wgnntp v0.0.0-20141028183654-faf514d19a62 h1:7gEdO1dfa/Gkhd7AhijYenTiZZCGZZoc0IvhENuzYNw=
+github.com/rspier/wgnntp v0.0.0-20141028183654-faf514d19a62/go.mod h1:VO3qd3OBSo5qbApnZqHoPS/WKrfWa7WxZ4rWj9MbI78=

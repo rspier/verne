@@ -1,47 +1,57 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
-import { BrowserRouter } from 'react-router-dom'; // Needed because GroupList contains <Link>
-import GroupList from './GroupList.jsx'; // Explicitly add .jsx
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { BrowserRouter } from 'react-router-dom';
+import GroupList from './GroupList.jsx';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'; // Added afterEach
 
 // Mock react-router-dom's Link component if it causes issues,
 // or wrap component in <BrowserRouter> as done below.
 
 describe('GroupList Component', () => {
-  // Mock useEffect or fetch if it makes real API calls.
-  // For now, it uses mock data internally, so direct rendering is fine.
-
   beforeEach(() => {
-    // Reset mocks if any were used, e.g., for fetch
-    // vi.resetAllMocks();
+    vi.resetAllMocks(); // Reset mocks before each test
+
+    // Default successful fetch mock for groups
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => [
+        { name: "comp.lang.go", description: "Go Language Discussion", count: 1234, high: 5000, low: 1 },
+        { name: "alt.humor.puns", description: "Puns Galore", count: 5678, high: 6000, low: 100 },
+        { name: "sci.space.news", description: "Latest Space News", count: 9101, high: 10000, low: 200 },
+      ],
+    });
   });
 
-  it('renders loading state initially', () => {
-    // To test loading state, we might need to control useEffect behavior.
-    // For this initial test, since mock data is synchronous, loading is very brief.
-    // We'll check for "Newsgroups" title as a basic render test.
+  afterEach(() => {
+    vi.restoreAllMocks(); // Restore original implementations after each test
+  });
+
+  it('renders loading state initially, then newsgroups title and groups', async () => {
     render(
       <BrowserRouter>
         <GroupList />
       </BrowserRouter>
     );
-    expect(screen.getByText('Newsgroups')).toBeInTheDocument();
+    // Initially, it shows "Loading groups..."
+    expect(screen.getByText('Loading groups...')).toBeInTheDocument();
+
+    // After fetch mock resolves, it should render the groups
+    expect(await screen.findByText('Newsgroups')).toBeInTheDocument();
+    expect(await screen.findByText('comp.lang.go')).toBeInTheDocument();
+    expect(await screen.findByText('alt.humor.puns')).toBeInTheDocument();
   });
 
-  it('renders a list of groups', async () => {
+  it('renders links for each group', async () => { // Combined the list rendering and link checking
     render(
       <BrowserRouter>
         <GroupList />
       </BrowserRouter>
     );
-    // The mock data is set synchronously in useEffect
-    // Wait for any potential microtasks to finish, though likely not needed here.
-    // await screen.findByText(/comp.lang.go/i); // Example: find by text using regex
 
-    // Check for one of the mock group names
-    expect(screen.getByText('comp.lang.go')).toBeInTheDocument();
-    expect(screen.getByText('alt.humor.puns')).toBeInTheDocument();
-    expect(screen.getByText('sci.space.news')).toBeInTheDocument();
+    // Wait for groups to render
+    await screen.findByText('comp.lang.go');
+
+    // Check for links
 
     // Check for links
     const links = screen.getAllByRole('link');

@@ -13,7 +13,7 @@ import (
 	// "io" // No longer directly used in this simplified test file
 
 	"github.com/julienschmidt/httprouter"
-	"github.com/willglynn/nntp" // For nntp types used in mocks
+	"github.com/rspier/wgnntp" // Changed to rspier/wgnntp
 )
 
 var _ *httprouter.Router // Ensure httprouter import is used
