@@ -16,6 +16,8 @@ import (
 	"image"
 	"image/color"
 	"image/draw"      // For drawing image onto another
+	"math/rand"
+	"time"
 
 	"github.com/boombuler/barcode"
 	"github.com/boombuler/barcode/qr"
@@ -48,6 +50,156 @@ var (
 	framesPerQR int
 	resolution  string
 )
+
+// Helper function to draw a dot (actually a small square)
+func drawDot(img *image.RGBA, x, y int, c color.Color, dotSize int) {
+	for i := 0; i < dotSize; i++ {
+		for j := 0; j < dotSize; j++ {
+			// Basic boundary check, though pattern generation should handle it
+			if x+i >= 0 && x+i < img.Bounds().Dx() && y+j >= 0 && y+j < img.Bounds().Dy() {
+				img.Set(x+i, y+j, c)
+			}
+		}
+	}
+}
+
+// abs returns the absolute value of x.
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// drawLine draws a line using a simple algorithm (modified Bresenham for 1px thickness).
+func drawLine(img *image.RGBA, x1, y1, x2, y2 int, c color.Color) {
+	dx := abs(x2 - x1)
+	dy := -abs(y2 - y1) // Adjusted for typical algorithm style with negative dy
+
+	sx := 1
+	if x1 > x2 {
+		sx = -1
+	}
+	sy := 1
+	if y1 > y2 {
+		sy = -1
+	}
+	err := dx + dy // Error value e_xy
+
+	for {
+		if x1 >= 0 && x1 < img.Bounds().Dx() && y1 >= 0 && y1 < img.Bounds().Dy() {
+			img.Set(x1, y1, c)
+		}
+		if x1 == x2 && y1 == y2 {
+			break
+		}
+		e2 := 2 * err
+		if e2 >= dy { // e_xy+e_x > 0
+			err += dy
+			x1 += sx
+		}
+		if e2 <= dx { // e_xy+e_y < 0
+			err += dx
+			y1 += sy
+		}
+	}
+}
+
+
+const (
+	dotDensityPer1000Px  = 8  // Number of dots per 1000 pixels of border area
+	lineDensityPer1000Px = 3  // Number of lines per 1000 pixels of border area
+	dotSizeVal           = 2  // px; Renamed from dotSize to avoid conflict with var
+	minLineLength        = 5  // px
+	maxLineLength        = 8  // px
+)
+var patternColor = color.Gray{Y: 200} // Light gray for pattern elements
+
+
+// drawPatternInRect fills the specified rectangle with a random pattern of dots and lines
+func drawPatternInRect(img *image.RGBA, rect image.Rectangle) {
+	rectWidth := rect.Dx()
+	rectHeight := rect.Dy()
+	if rectWidth <= 0 || rectHeight <= 0 {
+		return // Nothing to draw on
+	}
+	area := float64(rectWidth * rectHeight)
+
+	// Calculate number of dots and lines, ensuring at least one if area is small but > 0
+	numDots := int(area/1000.0*float64(dotDensityPer1000Px) + 0.5) // Add 0.5 for rounding
+	if area > 0 && numDots == 0 && dotDensityPer1000Px > 0 {
+		numDots = 1
+	}
+	numLines := int(area/1000.0*float64(lineDensityPer1000Px) + 0.5) // Add 0.5 for rounding
+	if area > 0 && numLines == 0 && lineDensityPer1000Px > 0 {
+		numLines = 1
+	}
+
+
+	// Draw dots
+	for k := 0; k < numDots; k++ {
+		if rectWidth-dotSizeVal < 0 || rectHeight-dotSizeVal < 0 { continue } // Avoid panic if rect is too small for dot
+		randX := rect.Min.X + rand.Intn(rectWidth-dotSizeVal+1)
+		randY := rect.Min.Y + rand.Intn(rectHeight-dotSizeVal+1)
+		drawDot(img, randX, randY, patternColor, dotSizeVal)
+	}
+
+	// Draw lines
+	for k := 0; k < numLines; k++ {
+		lineLength := minLineLength + rand.Intn(maxLineLength-minLineLength+1)
+
+		// Ensure rect is large enough for the line at all
+		if rectWidth-lineLength < 0 || rectHeight-lineLength < 0 { continue }
+
+
+		startX := rect.Min.X + rand.Intn(rectWidth-lineLength+1)
+		startY := rect.Min.Y + rand.Intn(rectHeight-lineLength+1) // Start Y can be anywhere if line can go up/down
+
+		var endX, endY int
+		orientation := rand.Intn(4) // 0: '\', 1: '/', 2: '-', 3: '|' (more variety)
+
+		switch orientation {
+		case 0: // '\'
+			endX = startX + lineLength
+			endY = startY + lineLength
+		case 1: // '/'
+			endX = startX + lineLength
+			endY = startY - lineLength
+		case 2: // '-' horizontal
+			endX = startX + lineLength
+			endY = startY
+		case 3: // '|' vertical
+			endX = startX
+			endY = startY + lineLength
+		}
+
+		// Clip line endpoints to be within the specific rectangle 'rect'
+		// This is a simple clipping, more advanced cohen-sutherland could be used if lines frequently cross boundaries
+		finalStartX, finalStartY, finalEndX, finalEndY := startX, startY, endX, endY
+
+		// Clip X
+		if finalStartX < rect.Min.X { finalStartX = rect.Min.X }
+		if finalStartX >= rect.Max.X { finalStartX = rect.Max.X -1 }
+		if finalEndX < rect.Min.X { finalEndX = rect.Min.X }
+		if finalEndX >= rect.Max.X { finalEndX = rect.Max.X -1 }
+		// Clip Y
+		if finalStartY < rect.Min.Y { finalStartY = rect.Min.Y }
+		if finalStartY >= rect.Max.Y { finalStartY = rect.Max.Y -1 }
+		if finalEndY < rect.Min.Y { finalEndY = rect.Min.Y }
+		if finalEndY >= rect.Max.Y { finalEndY = rect.Max.Y -1 }
+
+		// Check if after clipping the line has any length left
+		if finalStartX == finalEndX && finalStartY == finalEndY && lineLength > 0 {
+			// If it's a point after clipping a line, draw it as a dot
+			if rectWidth-dotSizeVal >=0 && rectHeight-dotSizeVal >=0 { // ensure dot fits
+			   drawDot(img, finalStartX, finalStartY, patternColor, dotSizeVal)
+			}
+		} else if !(finalStartX == finalEndX && finalStartY == finalEndY) { // only draw if not collapsed to a single point by clipping unless it was a point
+			drawLine(img, finalStartX, finalStartY, finalEndX, finalEndY, patternColor)
+		}
+	}
+}
+
 
 // createBlankImage creates a blank (black) PNG image.
 func createBlankImage(filePath string, width int, height int) error {
@@ -108,6 +260,9 @@ func main() {
 	flag.StringVar(&resolution, "resolution", "256x256", "Video resolution (e.g., \"1920x1080\")")
 
 	flag.Parse()
+
+	// Seed random number generator for pattern generation
+	rand.Seed(time.Now().UnixNano())
 
 	ffmpegPath, err := findFFmpegExecutable()
 	if err != nil {
@@ -251,19 +406,37 @@ func main() {
 		finalCanvasWidth := qrSize + (2 * borderSize)
 		finalCanvasHeight := qrSize + (2 * borderSize)
 
-		// Create a new canvas image, filled with white for the border
+		// Create a new canvas image, filled with white. This will be the background for QR and pattern.
 		borderedQrImageCanvas := image.NewRGBA(image.Rect(0, 0, finalCanvasWidth, finalCanvasHeight))
 		draw.Draw(borderedQrImageCanvas, borderedQrImageCanvas.Bounds(), image.White, image.Point{}, draw.Src)
 
 		// Draw the original scaled QR code (which is qrSize x qrSize) onto the canvas,
 		// positioning its top-left corner at (borderSize, borderSize)
+		qrRectInCanvas := image.Rect(borderSize, borderSize, borderSize+qrSize, borderSize+qrSize)
 		draw.Draw(borderedQrImageCanvas,
-			originalScaledQrCode.Bounds().Add(image.Point{X: borderSize, Y: borderSize}),
+			qrRectInCanvas,
 			originalScaledQrCode,
 			image.Point{}, // Start drawing from originalScaledQrCode's origin (0,0)
 			draw.Over)
 
-		// Save the bordered QR code canvas as a PNG file
+		// Define the four border areas and draw patterns in them
+		// Top border strip
+		topBorderRect := image.Rect(0, 0, finalCanvasWidth, borderSize)
+		drawPatternInRect(borderedQrImageCanvas, topBorderRect)
+
+		// Bottom border strip
+		bottomBorderRect := image.Rect(0, borderSize+qrSize, finalCanvasWidth, finalCanvasHeight)
+		drawPatternInRect(borderedQrImageCanvas, bottomBorderRect)
+
+		// Left border strip (excluding corners covered by top/bottom strips)
+		leftBorderRect := image.Rect(0, borderSize, borderSize, borderSize+qrSize)
+		drawPatternInRect(borderedQrImageCanvas, leftBorderRect)
+
+		// Right border strip (excluding corners covered by top/bottom strips)
+		rightBorderRect := image.Rect(borderSize+qrSize, borderSize, finalCanvasWidth, borderSize+qrSize)
+		drawPatternInRect(borderedQrImageCanvas, rightBorderRect)
+
+		// Save the bordered QR code canvas with pattern as a PNG file
 		// The final image will be (qrSize + 40) x (qrSize + 40)
 		frameFileName := filepath.Join(tempDir, fmt.Sprintf("qr_frame_%04d.png", i))
 		file, err := os.Create(frameFileName)
