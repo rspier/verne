@@ -481,23 +481,20 @@ function assembleData() {
         progressOverview.textContent = `Data assembly incomplete. Missing chunk(s) (e.g., seq ${firstMissing}). Collected ${collectedChunks.size} of expected ${numChunksToAssemble}.`;
         outputTextarea.value = `<Incomplete data: Missing chunk(s). First missing: ${firstMissing}. Expected ${numChunksToAssemble} total.>`;
         downloadLink.style.display = 'none';
-        // Optionally, could still offer to assemble what we have. For now, require all up to expected.
         return;
     }
 
-    progressOverview.textContent = `All ${expectedCount} chunks from 0 to ${finalHighestSeqToCheck} received! Assembling...`;
+    // If we are here, all chunks up to numChunksToAssemble are present.
+    progressOverview.textContent = `All ${numChunksToAssemble} chunks (0 to ${numChunksToAssemble > 0 ? numChunksToAssemble - 1 : 0}) received! Assembling...`;
 
-    // Concatenate all chunks in order
+    // Calculate total size for the reassembledCompressedData buffer
     let totalSize = 0;
-    for (let i = 0; i <= finalHighestSeqToCheck; i++) {
-        const chunkData = collectedChunks.get(i);
-        if (chunkData) { // Should always be true if missingChunksExist is false
+    for (let i = 0; i < numChunksToAssemble; i++) { // Use numChunksToAssemble
+        const chunkData = collectedChunks.get(i); // Should exist due to missingChunksExist check
+        if (chunkData) {
             totalSize += chunkData.length;
-        } else {
-            // This should not happen if the missing chunk check above is correct
-            updateStatus(`Critical error during assembly: Chunk ${i} reported as present but not found.`, true);
-            return;
         }
+        // No else needed here because missingChunksExist would have been true and an error reported already.
     }
 
     const reassembledCompressedData = new Uint8Array(totalSize);
