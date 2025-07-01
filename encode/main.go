@@ -49,6 +49,7 @@ var (
 	fps         int
 	framesPerQR int
 	resolution  string
+	crfValue    int
 )
 
 // Helper function to draw a dot (actually a small square)
@@ -258,6 +259,7 @@ func main() {
 	flag.IntVar(&fps, "fps", 1, "Frames per second for the output video")
 	flag.IntVar(&framesPerQR, "framesPerQR", 1, "Number of video frames each QR code is displayed for")
 	flag.StringVar(&resolution, "resolution", "256x256", "Video resolution (e.g., \"1920x1080\")")
+	flag.IntVar(&crfValue, "crf", 18, "Constant Rate Factor (CRF) for libx264. 0-51. Lower is higher quality. 18 is often considered visually lossless. Default is 23.")
 
 	flag.Parse()
 
@@ -290,6 +292,7 @@ func main() {
 	fmt.Printf("FPS: %d\n", fps)
 	fmt.Printf("Frames per QR: %d\n", framesPerQR)
 	fmt.Printf("Resolution: %s\n", resolution)
+	fmt.Printf("CRF Value: %d\n", crfValue)
 	// fmt.Printf("Actual QR Recovery Level for library: %v\n", qrRecoveryLevel) // For debugging
 
 	// Read input file
@@ -325,14 +328,30 @@ func main() {
 	defer os.RemoveAll(tempDir) // Clean up afterwards
 	fmt.Printf("Using temporary directory for frames: %s\n", tempDir)
 
-	// Parse resolution for padding frames
+	// Parse video resolution
 	videoWidth, videoHeight, err := parseResolution(resolution)
 	if err != nil {
-		// Fallback to qrSize if resolution is invalid, though it should be caught later by ffmpeg arg validation too
-		fmt.Fprintf(os.Stderr, "Warning: could not parse resolution '%s' for padding frames: %v. Using %dx%d\n", resolution, err, qrSize, qrSize)
-		videoWidth = qrSize
-		videoHeight = qrSize
+		// This error is already handled by ffmpeg arg validation later, but good to catch early if needed for other logic
+		// For the purpose of the QR size check, we need valid videoWidth and videoHeight.
+		// If parseResolution fails, ffmpeg will also fail. We can let that happen,
+		// or exit here if we strictly need videoWidth/Height for the check.
+		// Let's assume parseResolution is robust or ffmpeg's error is sufficient if resolution is malformed.
+		// However, the plan is to check video resolution against QR image size.
+		fmt.Fprintf(os.Stderr, "Error parsing video resolution '%s': %v\n", resolution, err)
+		os.Exit(1)
 	}
+
+	// Check if video resolution is sufficient for the QR code size + border
+	const borderSize = 20 // This is defined in the QR generation part, ensure it's consistent or make it a package/main const
+	finalQrImageWidth := qrSize + (2 * borderSize)
+	finalQrImageHeight := qrSize + (2 * borderSize) // Same as width
+
+	if videoWidth < finalQrImageWidth || videoHeight < finalQrImageHeight {
+		fmt.Fprintf(os.Stderr, "Error: Video resolution (%dx%d) is too small to display the QR code at its native size with border (%dx%d).\n", videoWidth, videoHeight, finalQrImageWidth, finalQrImageHeight)
+		fmt.Fprintf(os.Stderr, "Please increase the video -resolution to at least %dx%d, or reduce -qrSize.\n", finalQrImageWidth, finalQrImageHeight)
+		os.Exit(1)
+	}
+
 
 	paddingDurationSeconds := 2
 	numPaddingFrames := paddingDurationSeconds * fps // Total frames for one side of padding
@@ -615,6 +634,7 @@ func main() {
 		"-framerate", ffmpegInputFrameRate, // Input image sequence framerate
 		"-i", filepath.Join(finalSequenceTempDir, "frame_%06d.png"), // Use the new pattern
 		"-c:v", "libx264",
+		"-crf", strconv.Itoa(crfValue), // Add CRF flag
 		"-r", strconv.Itoa(fps), // Output video frame rate (should match input -framerate)
 		"-pix_fmt", "yuv420p",
 	}
