@@ -15,6 +15,7 @@ import (
 	"image/png"       // For saving QR code as PNG
 	"image"
 	"image/color"
+	"image/draw"      // For drawing image onto another
 
 	"github.com/boombuler/barcode"
 	"github.com/boombuler/barcode/qr"
@@ -238,12 +239,30 @@ func main() {
 			continue
 		}
 
-		// Scale the barcode to the desired size
-		scaledQrCode, err := barcode.Scale(qrCode, qrSize, qrSize)
+		// Add a 20px border around the QR code
+		const borderSize = 20
+		minQrSymbolSize := 20 // Minimum practical size for the QR symbol itself
+		if qrSize < (2*borderSize + minQrSymbolSize) {
+			fmt.Fprintf(os.Stderr, "Error: qrSize %d is too small to accommodate a %dpx border and a scannable QR code. Minimum recommended qrSize is %d.\n", qrSize, borderSize, (2*borderSize + minQrSymbolSize))
+			// Decide whether to error out or try to proceed. For now, let's error.
+			os.Exit(1)
+		}
+
+		innerQrActualSize := qrSize - (2 * borderSize)
+
+		// Scale the barcode to the inner size
+		scaledInnerQrCode, err := barcode.Scale(qrCode, innerQrActualSize, innerQrActualSize)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error scaling QR code for chunk %d (seq %d): %v\n", i, header.SequenceNum, err)
+			fmt.Fprintf(os.Stderr, "Error scaling QR code for chunk %d (seq %d) to inner size %dx%d: %v\n", i, header.SequenceNum, innerQrActualSize, innerQrActualSize, err)
 			continue
 		}
+
+		// Create a new canvas image of qrSize x qrSize, filled with white for the border
+		finalQrImage := image.NewRGBA(image.Rect(0, 0, qrSize, qrSize))
+		draw.Draw(finalQrImage, finalQrImage.Bounds(), image.White, image.Point{}, draw.Src)
+
+		// Draw the scaled QR code onto the canvas, offset by borderSize
+		draw.Draw(finalQrImage, scaledInnerQrCode.Bounds().Add(image.Point{X: borderSize, Y: borderSize}), scaledInnerQrCode, image.Point{}, draw.Over)
 
 		// Save QR code as a PNG file
 		frameFileName := filepath.Join(tempDir, fmt.Sprintf("qr_frame_%04d.png", i))
@@ -252,7 +271,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error creating PNG file for chunk %d (seq %d): %v\n", i, header.SequenceNum, err)
 			continue
 		}
-		err = png.Encode(file, scaledQrCode)
+		err = png.Encode(file, finalQrImage) // Encode the canvas with the bordered QR
 		file.Close() // Close the file even if png.Encode fails, though it might be a bit late.
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error writing QR code PNG for chunk %d (seq %d) to %s: %v\n", i, header.SequenceNum, frameFileName, err)
