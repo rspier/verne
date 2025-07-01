@@ -12,12 +12,14 @@ const outputTextarea = document.getElementById('outputText') as HTMLTextAreaElem
 const downloadLink = document.getElementById('downloadLink') as HTMLAnchorElement | null;
 const fileNameInput = document.getElementById('fileNameInput') as HTMLInputElement | null;
 const progressOverview = document.getElementById('progressOverview') as HTMLDivElement | null;
+const timingInfo = document.getElementById('timingInfo') as HTMLDivElement | null; // For timing info
 
 
 // --- Core State Variables ---
 let stream: MediaStream | null = null;
 let frameProcessorIntervalId: number | null = null;
 const FRAME_PROCESS_INTERVAL_MS = 500; // Process a frame every 500ms, adjust as needed
+let frameCounter = 0; // Frame counter for status messages
 
 // For storing and reassembling chunks
 // Key: sequence number (number), Value: Uint8Array (original data chunk)
@@ -220,6 +222,7 @@ async function startCapture() {
         collectedChunks.clear();
         highestSequenceNumberSeen = -1;
         totalChunksExpected = -1; // Reset, might be determined from first valid chunk
+        frameCounter = 0; // Reset frame counter
 
         updateStatus("Screen capture started. Processing frames...");
         if (frameProcessorIntervalId !== null) {
@@ -263,51 +266,73 @@ function stopCapture() {
 
 
 function processFrame() {
-    if (!stream || !videoElement || !canvasElement || !statusOutput || !h64) {
-        // updateStatus("processFrame: Prerequisites not met (stream, elements, or XXHash).", true);
+    if (!stream || !videoElement || !canvasElement || !statusOutput || !h64 || !timingInfo) {
+        // updateStatus("processFrame: Prerequisites not met.", true);
+        // Don't update status here as this might be called frequently before start
         return;
     }
     if (videoElement.readyState < videoElement.HAVE_METADATA || videoElement.videoWidth === 0) {
-        // updateStatus("Video not ready or no video data.", false);
         return; // Video not ready yet
     }
 
+    frameCounter++;
+    let t0, t1, t2, t3, t4, t5; // Timestamps
+    let captureDuration = 0, scanDuration = 0, dataProcessingDuration = 0;
+
+    updateStatus(`Frame ${frameCounter}: Capturing...`);
+    t0 = performance.now();
+
     const context = canvasElement.getContext('2d', { willReadFrequently: true });
     if (!context) {
-        updateStatus("Could not get 2D context from canvas.", true);
+        updateStatus(`Frame ${frameCounter}: Could not get 2D context from canvas.`, true);
         return;
     }
 
     canvasElement.width = videoElement.videoWidth;
     canvasElement.height = videoElement.videoHeight;
 
+    context.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+    t1 = performance.now();
+    captureDuration = t1 - t0;
+
+    updateStatus(`Frame ${frameCounter}: Decoding QR (Capture: ${captureDuration.toFixed(1)}ms)...`);
+    const imageData = context.getImageData(0, 0, canvasElement.width, canvasElement.height);
+
+    t2 = performance.now();
+    const code = jsQR(imageData.data, imageData.width, imageData.height, {
+        inversionAttempts: "dontInvert",
+    });
+    t3 = performance.now();
+    scanDuration = t3 - t2;
+
     try {
-        context.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
-        const imageData = context.getImageData(0, 0, canvasElement.width, canvasElement.height);
-
-        const code = jsQR(imageData.data, imageData.width, imageData.height, {
-            inversionAttempts: "dontInvert",
-        });
-
         if (code && code.data) {
             if (typeof code.data !== 'string' || code.data.trim() === "") {
-                // updateStatus("QR decoded, but data is not a non-empty string.", false);
+                updateStatus(`Frame ${frameCounter}: QR found, but data is empty/invalid (Scan: ${scanDuration.toFixed(1)}ms).`);
+                timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ---, Total: ${(captureDuration + scanDuration).toFixed(1)}ms`;
                 return;
             }
 
-            const hexPayload = code.data;
-            // updateStatus(`QR Decoded (Hex): ${hexPayload.substring(0, 30)}...`, false);
+            updateStatus(`Frame ${frameCounter}: QR found. Processing data (Scan: ${scanDuration.toFixed(1)}ms)...`);
+            t4 = performance.now();
 
+            const hexPayload = code.data;
             let finalPayloadBytes: Uint8Array;
             try {
                 finalPayloadBytes = hexToBytes(hexPayload);
             } catch (e: any) {
-                updateStatus(`Error hex-decoding payload: ${e.message}`, true);
+                t5 = performance.now(); // Still record time up to the error
+                dataProcessingDuration = t5 - t4;
+                updateStatus(`Frame ${frameCounter}: Error hex-decoding payload: ${e.message} (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
+                timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms (ERR), Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
                 return;
             }
 
             if (finalPayloadBytes.length < 16) { // Minimum header size
-                updateStatus(`Payload too short after hex decode: ${finalPayloadBytes.length} bytes. Needs 16 for header.`, true);
+                t5 = performance.now();
+                dataProcessingDuration = t5 - t4;
+                updateStatus(`Frame ${frameCounter}: Payload too short (${finalPayloadBytes.length}B) (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
+                timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms (ERR), Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
                 return;
             }
 
@@ -315,76 +340,66 @@ function processFrame() {
             const sequenceNum = bytesToUint32BE(finalPayloadBytes, 8);
             const dataLength = bytesToUint32BE(finalPayloadBytes, 12);
 
-            // updateStatus(`Parsed Header: Seq=${sequenceNum}, Len=${dataLength}, Checksum=${headerChecksum}`, false);
-
-
             if (16 + dataLength > finalPayloadBytes.length) {
-                updateStatus(`DataLength in header (${dataLength}) + header size (16) exceeds actual payload size (${finalPayloadBytes.length}). Corrupt?`, true);
+                t5 = performance.now();
+                dataProcessingDuration = t5 - t4;
+                updateStatus(`Frame ${frameCounter}: Header dataLength mismatch (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
+                timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms (ERR), Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
                 return;
             }
             const originalChunkData = finalPayloadBytes.slice(16, 16 + dataLength);
 
-            // Verify checksum
-            // Data for checksum: SequenceNum (4B BE) + DataLength (4B BE) + OriginalData
             const checksumDataBuffer = new Uint8Array(4 + 4 + originalChunkData.length);
             const view = new DataView(checksumDataBuffer.buffer);
-            view.setUint32(0, sequenceNum, false); // false for Big Endian
-            view.setUint32(4, dataLength, false); // false for Big Endian
+            view.setUint32(0, sequenceNum, false);
+            view.setUint32(4, dataLength, false);
             checksumDataBuffer.set(originalChunkData, 8);
 
-            const calculatedChecksumBigInt = h64().update(checksumDataBuffer).digest('bigint'); // Get checksum as BigInt
+            const calculatedChecksumBigInt = h64().update(checksumDataBuffer).digest('bigint');
 
             if (calculatedChecksumBigInt !== headerChecksum) {
-                updateStatus(`Checksum mismatch for Seq ${sequenceNum}! Expected ${headerChecksum}, Got ${calculatedChecksumBigInt}. Discarding.`, true);
+                t5 = performance.now();
+                dataProcessingDuration = t5 - t4;
+                updateStatus(`Frame ${frameCounter}: Checksum mismatch for Seq ${sequenceNum} (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
+                timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms (ERR), Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
                 return;
             }
 
-            // Checksum OK, store the chunk if not already received
             if (!collectedChunks.has(sequenceNum)) {
                 collectedChunks.set(sequenceNum, originalChunkData);
-                updateStatus(`Chunk ${sequenceNum} (len ${dataLength}) received and verified. Total unique: ${collectedChunks.size}.`);
                 if (sequenceNum > highestSequenceNumberSeen) {
                     highestSequenceNumberSeen = sequenceNum;
                 }
-                // Update some UI about progress, e.g. number of chunks
-                updateReceivedSequenceDisplay();
-
-                // Final chunk detection logic
+                // Final chunk detection logic (remains the same)
                 if (totalChunksExpected !== -1 && sequenceNum >= totalChunksExpected) {
-                    // A chunk arrived that is beyond our previously determined total.
-                    // This means the previous 'short chunk' was not the true final chunk.
                     updateStatus(`Info: Chunk ${sequenceNum} received after a presumed final chunk. Resetting total expected chunks.`, false);
-                    totalChunksExpected = -1; // Reset, as our previous assumption was wrong.
-                    // The 'Safe to stop' message color might need resetting if it was green
+                    totalChunksExpected = -1;
                     if (statusOutput && statusOutput.style.color === 'green') {
-                        statusOutput.style.color = 'black'; // Reset to default
-                        // The main status message will be updated by subsequent updateStatus calls or by updateReceivedSequenceDisplay
+                        statusOutput.style.color = 'black';
                     }
                 }
-
                 if (totalChunksExpected === -1 && dataLength < presumedEncoderChunkSize) {
-                    // This is now the current best candidate for the final chunk.
                     totalChunksExpected = sequenceNum + 1;
-                    updateStatus(`Potential final chunk ${sequenceNum} detected (size ${dataLength} < ${presumedEncoderChunkSize}). Expecting ${totalChunksExpected} total chunks.`, false);
                 } else if (totalChunksExpected !== -1 && dataLength < presumedEncoderChunkSize && (sequenceNum + 1) < totalChunksExpected) {
-                    // A new shorter chunk arrived, and it implies an even smaller total number of chunks.
-                    // This is unusual but could happen with extreme out-of-order. Update to the smaller total.
                      updateStatus(`Info: A new, earlier short chunk ${sequenceNum} detected. Updating total expected from ${totalChunksExpected} to ${sequenceNum + 1}.`, false);
                     totalChunksExpected = sequenceNum + 1;
                 }
-                // Note: A full-sized chunk arriving as sequenceNum === totalChunksExpected - 1
-                // when totalChunksExpected was set by a short chunk is fine.
-                // It just means the file size was an exact multiple of chunkSize before that short one.
-
-                updateReceivedSequenceDisplay(); // Update display with potentially new total expected or reset state
-
-            } else {
-                // updateStatus(`Duplicate chunk ${sequenceNum} received.`, false);
+                updateReceivedSequenceDisplay(); // This might update statusOutput too
             }
+            t5 = performance.now();
+            dataProcessingDuration = t5 - t4;
+            updateStatus(`Frame ${frameCounter}: Chunk ${sequenceNum} (len ${dataLength}) OK. (DataProc: ${dataProcessingDuration.toFixed(1)}ms) Total unique: ${collectedChunks.size}.`);
+            timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms, Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
 
-        } // else no QR code found in this frame - do nothing, common case.
+        } else { // No QR code found
+            updateStatus(`Frame ${frameCounter}: No QR code found (Scan: ${scanDuration.toFixed(1)}ms).`);
+            timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ---, Total: ${(captureDuration + scanDuration).toFixed(1)}ms`;
+        }
     } catch (e: any) {
-        updateStatus(`Error processing frame: ${e.message || e}`, true);
+        // General error during processing after scan attempt
+        const totalDurationSoFar = captureDuration + scanDuration + dataProcessingDuration;
+        updateStatus(`Frame ${frameCounter}: Error processing frame: ${e.message || e} (Total time before error: ${totalDurationSoFar.toFixed(1)}ms)`, true);
+        timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms (ERR), Total: ${totalDurationSoFar.toFixed(1)}ms (ERR)`;
     }
 }
 
