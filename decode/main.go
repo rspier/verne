@@ -13,7 +13,7 @@ import (
 	_ "image/png" // Needed for image.Decode to recognize PNGs
 	"sort"
 	"encoding/binary" // For parsing sequence number and checksum
-	"encoding/base64" // For Base64 decoding
+	"encoding/ascii85"// For ASCII85 decoding
 	"bytes"           // For bytes.Buffer
 	"io"              // For io.ReadFull
 
@@ -28,14 +28,14 @@ import (
 // Order: Checksum, TotalChunks, SequenceNum, DataLength
 type ChunkHeader struct {
 	Checksum    uint64 // XXH64 checksum
-	TotalChunks uint32 // Total number of chunks in the transmission
-	SequenceNum uint32 // Sequence number of this chunk (0-indexed)
-	DataLength  uint32 // Length of the OriginalData part of this chunk
+	TotalChunks uint16 // Total number of chunks in the transmission (max 65535)
+	SequenceNum uint16 // Sequence number of this chunk (0-indexed, max 65535)
+	DataLength  uint16 // Length of the OriginalData part of this chunk (max 65535)
 }
 
 // Actual size of header when serialized:
-// 8 (Checksum) + 4 (TotalChunks) + 4 (SequenceNum) + 4 (DataLength) = 20 bytes
-const newHeaderSize = 20
+// 8 (Checksum) + 2 (TotalChunks) + 2 (SequenceNum) + 2 (DataLength) = 14 bytes
+const newHeaderSize = 14
 
 var (
 	inputFile         string
@@ -183,13 +183,13 @@ func main() {
 
 	fmt.Printf("Found %d frames to process for QR decoding.\n", len(extractedFrames))
 
-	// decodedChunks stores the original data part of valid chunks, keyed by sequence number.
-	decodedChunks := make(map[uint32][]byte)
+	// decodedChunks stores the original data part of valid chunks, keyed by sequence number (now uint16).
+	decodedChunks := make(map[uint16][]byte)
 	// seenRawPayloads helps in quickly skipping already processed identical raw QR payloads
 	// that might appear on consecutive frames for the same data chunk.
 	seenRawPayloads := make(map[string]bool)
-	var maxSequenceNum uint32 = 0 // Keep track of the highest sequence number encountered.
-	var knownTotalChunks uint32 = 0 // Will be set from the first valid chunk's header.
+	var maxSequenceNum uint16 = 0 // Keep track of the highest sequence number encountered.
+	var knownTotalChunks uint16 = 0 // Will be set from the first valid chunk's header.
 	firstChunkProcessed := false
 	foundAnyValidChunk := false
 
@@ -222,24 +222,27 @@ func main() {
 			continue
 		}
 
-		// Encoder now writes a Base64 string into the QR code.
-		base64StringFromQR := result.GetText()
+		// Encoder now writes an ASCII85 string into the QR code.
+		ascii85StringFromQR := result.GetText()
 
-		// Deduplicate based on the Base64 string content of the QR code
-		if _, seen := seenRawPayloads[base64StringFromQR]; seen {
-			// fmt.Printf("Frame %d (%s): Duplicate raw QR payload (Base64 string) already processed. Skipping.\n", frameIdx+1, filepath.Base(framePath))
+		// Deduplicate based on the ASCII85 string content of the QR code
+		if _, seen := seenRawPayloads[ascii85StringFromQR]; seen {
+			// fmt.Printf("Frame %d (%s): Duplicate raw QR payload (ASCII85 string) already processed. Skipping.\n", frameIdx+1, filepath.Base(framePath))
 			continue
 		}
-		seenRawPayloads[base64StringFromQR] = true // Mark this raw payload as processed.
+		seenRawPayloads[ascii85StringFromQR] = true // Mark this raw payload as processed.
 
-		// Base64-decode the content
-		rawPayloadBytes, err := base64.StdEncoding.DecodeString(base64StringFromQR)
+		// ASCII85-decode the content
+		// Create a new reader for the ASCII85 string
+		ascii85Reader := ascii85.NewDecoder(strings.NewReader(ascii85StringFromQR))
+		rawPayloadBytes, err := io.ReadAll(ascii85Reader) // Requires Go 1.16+
+		// If using older Go, use: rawPayloadBytes, err := ioutil.ReadAll(ascii85Reader) and import "io/ioutil"
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s): Failed to Base64-decode QR content: %v. Content: '%s'. Skipping.\n", frameIdx+1, filepath.Base(framePath), err, base64StringFromQR)
+			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s): Failed to ASCII85-decode QR content: %v. Content: '%s'. Skipping.\n", frameIdx+1, filepath.Base(framePath), err, ascii85StringFromQR)
 			continue
 		}
 
-		if len(rawPayloadBytes) < newHeaderSize { // newHeaderSize is now 20
+		if len(rawPayloadBytes) < newHeaderSize { // newHeaderSize is now 14
 			fmt.Fprintf(os.Stderr, "Warning: Frame %d (%s): Decoded QR payload too short (%d bytes) for header. Min required: %d. Skipping.\n", frameIdx+1, filepath.Base(framePath), len(rawPayloadBytes), newHeaderSize)
 			continue
 		}
@@ -264,11 +267,11 @@ func main() {
 			continue
 		}
 
-		// Verify checksum: Checksum covers TotalChunks (4B) + SequenceNum (4B) + DataLength (4B) + OriginalData
-		headerFieldsForChecksumBytes := make([]byte, 4+4+4) // For TotalChunks, SequenceNum, DataLength
-		binary.BigEndian.PutUint32(headerFieldsForChecksumBytes[0:4], header.TotalChunks)
-		binary.BigEndian.PutUint32(headerFieldsForChecksumBytes[4:8], header.SequenceNum)
-		binary.BigEndian.PutUint32(headerFieldsForChecksumBytes[8:12], header.DataLength)
+		// Verify checksum: Checksum covers TotalChunks (2B) + SequenceNum (2B) + DataLength (2B) + OriginalData
+		headerFieldsForChecksumBytes := make([]byte, 2+2+2) // For TotalChunks, SequenceNum, DataLength (all uint16)
+		binary.BigEndian.PutUint16(headerFieldsForChecksumBytes[0:2], header.TotalChunks)
+		binary.BigEndian.PutUint16(headerFieldsForChecksumBytes[2:4], header.SequenceNum)
+		binary.BigEndian.PutUint16(headerFieldsForChecksumBytes[4:6], header.DataLength)
 
 		dataThatWasChecksummed := append(headerFieldsForChecksumBytes, originalData...)
 		calculatedChecksum := xxhash.Sum64(dataThatWasChecksummed)
@@ -322,12 +325,13 @@ func main() {
 	}
 
 	// Determine the number of chunks to assemble
-	numChunksToAssemble := knownTotalChunks
-	if !firstChunkProcessed || knownTotalChunks == 0 { // If no valid header set knownTotalChunks, or it was 0
+	var numChunksToAssemble uint16 = knownTotalChunks // Use var to allow modification in fallback
+	if !firstChunkProcessed || knownTotalChunks == 0 {
 		fmt.Fprintf(os.Stderr, "Warning: Total number of chunks not definitively known from headers (or was 0). Assembling based on highest sequence number seen: %d.\n", maxSequenceNum)
-		numChunksToAssemble = maxSequenceNum + 1
-		if !foundAnyValidChunk { // If no chunks at all, numChunksToAssemble would be 1 from maxSequenceNum=0
-		    numChunksToAssemble = 0
+		if !foundAnyValidChunk && maxSequenceNum == 0 { // No chunks found, maxSequenceNum is 0 by init
+			numChunksToAssemble = 0
+		} else {
+			numChunksToAssemble = maxSequenceNum + 1
 		}
 	}
 
@@ -336,11 +340,13 @@ func main() {
 	// --- Data Aggregation and Output ---
 	var finalDataBuffer bytes.Buffer
 	missingSequences := false
-	if numChunksToAssemble == 0 && len(decodedChunks) == 0 {
+	if numChunksToAssemble == 0 && len(decodedChunks) == 0 { // Check if numChunksToAssemble is 0
 		fmt.Println("No data to assemble.")
 	} else {
-		for i := uint32(0); i < numChunksToAssemble; i++ {
-			chunkData, ok := decodedChunks[i]
+		for i := uint16(0); i < numChunksToAssemble; i++ { // Iterate from 0 to numChunksToAssemble-1
+			chunkData, ok := decodedChunks[i] // decodedChunks keys are uint32, but we are iterating with uint16 'i'. This needs care.
+			                                   // The map keys should also be uint16 if sequence numbers are uint16.
+			                                   // Let's assume decodedChunks keys are uint16.
 			if !ok {
 				fmt.Fprintf(os.Stderr, "Error: Missing data chunk for sequence number %d (expected %d total).\n", i, numChunksToAssemble)
 				missingSequences = true

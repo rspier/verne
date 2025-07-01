@@ -1,6 +1,7 @@
 // --- Type Declarations for Global Libraries (loaded via CDN) ---
 declare var jsQR: any; // jsQR library
-declare var xxhash: any; // xxhash-wasm library (assuming it exposes 'xxhash' globally or on window)
+declare var xxhash: any; // xxhash-wasm library
+declare var CoolAscii85: { decode: (ascii85String: string) => Uint8Array }; // Placeholder for ASCII85 lib
 
 // --- DOM Element References ---
 const videoElement = document.getElementById('video') as HTMLVideoElement | null;
@@ -41,6 +42,15 @@ function bytesToUint32BE(bytes: Uint8Array, offset: number = 0): number {
     const view = new DataView(bytes.buffer, bytes.byteOffset + offset, 4);
     return view.getUint32(0, false); // false for Big Endian
 }
+
+/**
+ * Reads a Big Endian Uint16 from a Uint8Array at a given offset.
+ */
+function bytesToUint16BE(bytes: Uint8Array, offset: number = 0): number {
+    const view = new DataView(bytes.buffer, bytes.byteOffset + offset, 2);
+    return view.getUint16(0, false); // false for Big Endian
+}
+
 
 /**
  * Reads a Big Endian Uint64 (as BigInt) from a Uint8Array at a given offset.
@@ -302,55 +312,54 @@ function processFrame() {
             updateStatus(`Frame ${frameCounter}: QR found. Processing data (Scan: ${scanDuration.toFixed(1)}ms)...`);
             t4 = performance.now();
 
-            const base64Payload = code.data;
+            const ascii85Payload = code.data;
             let finalPayloadBytes: Uint8Array;
             try {
-                // Decode Base64
-                const binaryString = atob(base64Payload);
-                finalPayloadBytes = new Uint8Array(binaryString.length);
-                for (let i = 0; i < binaryString.length; i++) {
-                    finalPayloadBytes[i] = binaryString.charCodeAt(i);
+                // Decode ASCII85 using the placeholder library function
+                if (typeof CoolAscii85 === 'undefined' || typeof CoolAscii85.decode !== 'function') {
+                    throw new Error("ASCII85 decoding library (CoolAscii85.decode) not found or not a function.");
                 }
+                finalPayloadBytes = CoolAscii85.decode(ascii85Payload);
             } catch (e: any) {
                 t5 = performance.now(); // Still record time up to the error
                 dataProcessingDuration = t5 - t4;
-                updateStatus(`Frame ${frameCounter}: Error Base64-decoding payload: ${e.message} (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
+                updateStatus(`Frame ${frameCounter}: Error ASCII85-decoding payload: ${e.message} (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
                 timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms (ERR), Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
                 return;
             }
 
-            const HEADER_SIZE = 20; // New header size
+            const HEADER_SIZE = 14; // New header size (8 + 2 + 2 + 2)
 
             if (finalPayloadBytes.length < HEADER_SIZE) {
                 t5 = performance.now();
                 dataProcessingDuration = t5 - t4;
                 updateStatus(`Frame ${frameCounter}: Payload too short (${finalPayloadBytes.length}B, need ${HEADER_SIZE}) (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
-                timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms (ERR), Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
+                timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms (ERR_SHORT_PAYLOAD), Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
                 return;
             }
 
-            // Parse new header: Checksum (8B), TotalChunks (4B), SequenceNum (4B), DataLength (4B)
-            const headerChecksum = bytesToUint64BE(finalPayloadBytes, 0);    // Offset 0
-            const totalChunks = bytesToUint32BE(finalPayloadBytes, 8);       // Offset 8
-            const sequenceNum = bytesToUint32BE(finalPayloadBytes, 12);      // Offset 12
-            const dataLength = bytesToUint32BE(finalPayloadBytes, 16);       // Offset 16
+            // Parse new header: Checksum (8B), TotalChunks (2B), SequenceNum (2B), DataLength (2B)
+            const headerChecksum = bytesToUint64BE(finalPayloadBytes, 0);     // Offset 0
+            const totalChunks = bytesToUint16BE(finalPayloadBytes, 8);        // Offset 8
+            const sequenceNum = bytesToUint16BE(finalPayloadBytes, 10);       // Offset 10
+            const dataLength = bytesToUint16BE(finalPayloadBytes, 12);        // Offset 12
 
             if (HEADER_SIZE + dataLength > finalPayloadBytes.length) {
                 t5 = performance.now();
                 dataProcessingDuration = t5 - t4;
                 updateStatus(`Frame ${frameCounter}: Header dataLength mismatch (payload ${finalPayloadBytes.length}B, header ${HEADER_SIZE}B, data ${dataLength}B) (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
-                timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms (ERR), Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
+                timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms (ERR_LEN_MISMATCH), Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
                 return;
             }
             const originalChunkData = finalPayloadBytes.slice(HEADER_SIZE, HEADER_SIZE + dataLength);
 
-            // Checksum data: TotalChunks (4B) + SequenceNum (4B) + DataLength (4B) + OriginalData
-            const checksumDataBuffer = new Uint8Array(4 + 4 + 4 + originalChunkData.length);
+            // Checksum data: TotalChunks (2B) + SequenceNum (2B) + DataLength (2B) + OriginalData
+            const checksumDataBuffer = new Uint8Array(2 + 2 + 2 + originalChunkData.length);
             const view = new DataView(checksumDataBuffer.buffer);
-            view.setUint32(0, totalChunks, false);      // TotalChunks
-            view.setUint32(4, sequenceNum, false);      // SequenceNum
-            view.setUint32(8, dataLength, false);     // DataLength
-            checksumDataBuffer.set(originalChunkData, 12); // OriginalData starts after 12 bytes of these fields
+            view.setUint16(0, totalChunks, false);      // TotalChunks (uint16)
+            view.setUint16(2, sequenceNum, false);      // SequenceNum (uint16)
+            view.setUint16(4, dataLength, false);     // DataLength (uint16)
+            checksumDataBuffer.set(originalChunkData, 6); // OriginalData starts after 6 bytes of these fields
 
             const calculatedChecksumBigInt = h64().update(checksumDataBuffer).digest('bigint');
 

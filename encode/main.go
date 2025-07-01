@@ -11,14 +11,15 @@ import (
 	"bytes"           // For bytes.Buffer
 	"encoding/binary" // For converting sequence number to bytes
 	"io"              // For io.Copy
-	"encoding/hex"    // For hex encoding the payload (will be replaced by base64 for QR)
-	"encoding/base64" // For Base64 encoding QR payload
+	"encoding/hex"    // No longer used for QR payload
+	"encoding/ascii85"// For ASCII85 encoding QR payload
 	"image/png"       // For saving QR code as PNG
 	"image"
 	"image/color"
 	"image/draw"      // For drawing image onto another
 	"math/rand"
 	"time"
+	"math" // For math.MaxUint16
 
 	"github.com/boombuler/barcode"
 	"github.com/boombuler/barcode/qr"
@@ -27,17 +28,17 @@ import (
 
 // ChunkHeader defines the metadata prepended to each data chunk.
 // Note: The order of fields matters for serialization.
-// Checksum is calculated over: TotalChunks (4B) + SequenceNum (4B) + DataLength (4B) + OriginalData
+// Checksum is calculated over: TotalChunks (2B) + SequenceNum (2B) + DataLength (2B) + OriginalData
 type ChunkHeader struct {
 	Checksum    uint64 // XXH64 checksum
-	TotalChunks uint32 // Total number of chunks in the transmission
-	SequenceNum uint32 // Sequence number of this chunk (0-indexed)
-	DataLength  uint32 // Length of the OriginalData part of this chunk
+	TotalChunks uint16 // Total number of chunks in the transmission (max 65535)
+	SequenceNum uint16 // Sequence number of this chunk (0-indexed, max 65535)
+	DataLength  uint16 // Length of the OriginalData part of this chunk (max 65535 bytes)
 }
 
 // Actual size of header when serialized:
-// 8 (Checksum) + 4 (TotalChunks) + 4 (SequenceNum) + 4 (DataLength) = 20 bytes
-const newHeaderSize = 20
+// 8 (Checksum) + 2 (TotalChunks) + 2 (SequenceNum) + 2 (DataLength) = 14 bytes
+const newHeaderSize = 14
 
 // Note: qrLevelFlag and related types are removed as boombuler/barcode/qr uses constants like qr.M directly.
 // We will use qr.M as a default for now. A new flag can be added later if customization is needed.
@@ -375,26 +376,44 @@ func main() {
 	// qrImageFilePaths will store the paths to each QR code image, duplicated framesPerQR times.
 	actualQrImageFiles := []string{} // Temporary list for unique QR images
 
-	totalNumberOfChunks := uint32(len(chunks))
+	if len(chunks) > math.MaxUint16 {
+		fmt.Fprintf(os.Stderr, "Error: Number of chunks (%d) exceeds uint16 capacity (%d).\n", len(chunks), math.MaxUint16)
+		os.Exit(1)
+	}
+	totalNumberOfChunks := uint16(len(chunks))
 
 	for i, originalChunkData := range chunks {
+		if i > math.MaxUint16 {
+			// This should not happen if totalNumberOfChunks validation passed, but as a safeguard:
+			fmt.Fprintf(os.Stderr, "Error: Chunk index (%d) exceeds uint16 capacity.\n", i)
+			os.Exit(1)
+		}
+		sequenceNum := uint16(i)
+
+		if len(originalChunkData) > math.MaxUint16 {
+			fmt.Fprintf(os.Stderr, "Error: Length of original data chunk %d (%d bytes) exceeds uint16 capacity (%d).\n", i, len(originalChunkData), math.MaxUint16)
+			// This could also mean -chunkSize is too large.
+			os.Exit(1)
+		}
+		dataLen := uint16(len(originalChunkData))
+
 		header := ChunkHeader{
-			TotalChunks: totalNumberOfChunks, // Populate TotalChunks
-			SequenceNum: uint32(i),
-			DataLength:  uint32(len(originalChunkData)),
+			TotalChunks: totalNumberOfChunks,
+			SequenceNum: sequenceNum,
+			DataLength:  dataLen,
 		}
 
-		// Prepare data for checksum: TotalChunks (4B) + SequenceNum (4B) + DataLength (4B) + OriginalData
-		// Size of this part of header for checksum is 4+4+4 = 12 bytes
-		headerFieldsForChecksumBytes := make([]byte, 4+4+4)
-		binary.BigEndian.PutUint32(headerFieldsForChecksumBytes[0:4], header.TotalChunks)
-		binary.BigEndian.PutUint32(headerFieldsForChecksumBytes[4:8], header.SequenceNum)
-		binary.BigEndian.PutUint32(headerFieldsForChecksumBytes[8:12], header.DataLength)
+		// Prepare data for checksum: TotalChunks (2B) + SequenceNum (2B) + DataLength (2B) + OriginalData
+		// Size of this part of header for checksum is 2+2+2 = 6 bytes
+		headerFieldsForChecksumBytes := make([]byte, 2+2+2)
+		binary.BigEndian.PutUint16(headerFieldsForChecksumBytes[0:2], header.TotalChunks)
+		binary.BigEndian.PutUint16(headerFieldsForChecksumBytes[2:4], header.SequenceNum)
+		binary.BigEndian.PutUint16(headerFieldsForChecksumBytes[4:6], header.DataLength)
 
 		dataToChecksum := append(headerFieldsForChecksumBytes, originalChunkData...)
 		header.Checksum = xxhash.Sum64(dataToChecksum)
 
-		// Prepare final QR payload: Full Header (20B) + OriginalData
+		// Prepare final QR payload: Full Header (14B) + OriginalData
 		qrPayloadBuffer := new(bytes.Buffer)
 		// Write the header (which now includes TotalChunks and the calculated Checksum)
 		err := binary.Write(qrPayloadBuffer, binary.BigEndian, &header)
@@ -408,14 +427,21 @@ func main() {
 		// Note: boombuler/barcode/qr.Encode takes []byte directly for qr.Byte mode (auto-selected for []byte)
 		// or a string. Forcing byte mode is best for binary.
 		// The library will choose an appropriate QR code version automatically.
-		// Base64-encode the binary payload for the QR code.
-		base64Payload := base64.StdEncoding.EncodeToString(finalPayloadBytes)
+		// ASCII85-encode the binary payload for the QR code.
+		// Calculate the maximum possible length of the ASCII85 encoded data.
+		maxEncodedLen := ascii85.MaxEncodedLen(len(finalPayloadBytes))
+		dstEncoded := make([]byte, maxEncodedLen)
+		// Perform the encoding.
+		numEncodedBytes := ascii85.Encode(dstEncoded, finalPayloadBytes)
+		// Slice dstEncoded to get the actual encoded data.
+		ascii85Payload := string(dstEncoded[:numEncodedBytes])
 
 		// Using qr.M for medium error correction.
-		// qr.Auto should select Alphanumeric or Byte mode. Base64 is alphanumeric.
-		qrCode, err := qr.Encode(base64Payload, qr.M, qr.Auto)
+		// qr.Auto should select an appropriate mode for ASCII85 characters.
+		qrCode, err := qr.Encode(ascii85Payload, qr.M, qr.Auto)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error generating QR code for chunk %d (seq %d) with base64 payload: %v\n", i, header.SequenceNum, err)
+			// 'i' is the current chunk index from the loop, header.SequenceNum is the value set in the header. They should match.
+			fmt.Fprintf(os.Stderr, "Error generating QR code for chunk %d (header seq %d) with ASCII85 payload: %v\n", i, header.SequenceNum, err)
 			continue
 		}
 
@@ -477,8 +503,8 @@ func main() {
 		}
 
 		actualQrImageFiles = append(actualQrImageFiles, frameFileName)
-		// Log the size of the base64Payload string
-		fmt.Printf("Generated QR code for chunk %d (seq %d), base64 payload size %d chars: %s\n", i, header.SequenceNum, len(base64Payload), frameFileName)
+		// Log the size of the ascii85Payload string
+		fmt.Printf("Generated QR code for chunk %d (seq %d), ASCII85 payload size %d chars: %s\n", i, header.SequenceNum, len(ascii85Payload), frameFileName)
 	}
 
 	if len(actualQrImageFiles) == 0 {
