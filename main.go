@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log"
 	"os"
-	// "strconv" // No longer needed
+	"time"
 
-	nntpclient "github.com/kothawoc/go-nntp/client"
+	"github.com/willglynn/nntp"
 )
 
 func main() {
@@ -29,23 +29,25 @@ func main() {
 	}
 
 	fmt.Printf("Connecting to server: %s\n", *serverAddr)
-	nntpClient, err := nntpclient.New("tcp", *serverAddr)
+	conn, err := nntp.Dial("tcp", *serverAddr)
 	if err != nil {
 		log.Fatalf("Failed to connect to server %s: %v", *serverAddr, err)
 	}
-	// Note: The library doesn't seem to have an explicit Close() or Quit() method on the client.
-	// Connections are typically managed by the underlying net.Conn, which closes on program exit
-	// or when garbage collected if no longer referenced.
-	// For graceful shutdown, `nntpClient.Command("QUIT", 205)` could be used explicitly if needed,
-	// but the library handles command execution and response checking.
+	defer conn.Quit() // Ensure Quit is called before exiting
+
+	// Optional: Authenticate if needed, e.g.
+	// if err := conn.Authenticate("user", "pass"); err != nil {
+	//     log.Fatalf("Authentication failed: %v", err)
+	// }
 
 	fmt.Printf("Selecting group: %s\n", *groupName)
-	groupInfo, err := nntpClient.Group(*groupName)
+	groupInfo, err := conn.Group(*groupName)
 	if err != nil {
 		log.Fatalf("Failed to select group %s: %v", *groupName, err)
 	}
 
-	fmt.Printf("Group selected. Count: %d, Low: %d, High: %d\n", groupInfo.Count, groupInfo.Low, groupInfo.High)
+	fmt.Printf("Group selected. Name: %s, Count: %d, Low: %d, High: %d, Status: %s\n",
+		groupInfo.Name, groupInfo.Count, groupInfo.Low, groupInfo.High, groupInfo.Status)
 	fmt.Printf("Fetching last %d messages...\n\n", *messageCount)
 
 	if groupInfo.Count == 0 {
@@ -54,83 +56,73 @@ func main() {
 	}
 
 	numToFetch := *messageCount
-	if int(groupInfo.Count) < numToFetch {
+	if groupInfo.Count < int64(numToFetch) {
 		numToFetch = int(groupInfo.Count)
 	}
 
-	startArticle := groupInfo.High - int64(numToFetch) + 1
-	if startArticle < groupInfo.Low {
-		startArticle = groupInfo.Low
-		numToFetch = int(groupInfo.High - groupInfo.Low + 1) // Adjust numToFetch if we hit the bottom
+	if numToFetch == 0 { // Possible if groupInfo.Count was 0 and *messageCount > 0
+		fmt.Println("No articles to fetch.")
+		return
 	}
 
-	var articleNumbersToFetch []int
-	if groupInfo.High > 0 { // Ensure High is a valid article number
-		for i := 0; i < numToFetch; i++ {
-			articleNum := groupInfo.High - int64(i)
-			if articleNum < groupInfo.Low { // Stop if we go below the lowest article number
-				break
-			}
-			articleNumbersToFetch = append(articleNumbersToFetch, int(articleNum))
+	// Calculate the range of article numbers to fetch
+	// Overview(begin, end int64) - begin and end are inclusive.
+	endArticleNum := groupInfo.High
+	beginArticleNum := groupInfo.High - int64(numToFetch) + 1
+
+	if beginArticleNum < groupInfo.Low {
+		beginArticleNum = groupInfo.Low
+		// Recalculate numToFetch based on the actual available range if we hit the bottom
+		numToFetch = int(endArticleNum - beginArticleNum + 1)
+		if numToFetch <=0 {
+			fmt.Println("No articles in the calculated range (low water mark too high or group empty).")
+			return
 		}
-	} else {
-		fmt.Println("Group high water mark is 0, cannot fetch articles by number range from high.")
-        // Potentially try NEWNEWS if OVER by range fails or is not applicable.
-        // However, the task is to get the *most recent*, which implies working downwards from High.
-        // If High is 0, it implies an empty or problematic group state for this approach.
-		return
+	}
+
+	if endArticleNum < beginArticleNum { // Should not happen with above logic if group has articles
+	    fmt.Printf("Calculated end article %d is less than begin article %d. No articles to fetch.\n", endArticleNum, beginArticleNum)
+	    return
 	}
 
 
-	if len(articleNumbersToFetch) == 0 {
-		fmt.Println("No articles to fetch in the calculated range.")
-		return
-	}
-
-	// The nntpclient.Over() command is used to fetch article overview information for a range.
-	// We've calculated the article numbers for the most recent 'numToFetch' articles.
-	// fetchStartNum is the oldest (smallest number) and fetchEndNum is the newest (largest number) in that set.
-	fetchStartNum := articleNumbersToFetch[len(articleNumbersToFetch)-1] // smallest number in our target list (oldest)
-	fetchEndNum := articleNumbersToFetch[0]                             // largest number in our target list (newest)
-
-	fmt.Printf("Attempting to fetch overview for articles %d-%d\n", fetchStartNum, fetchEndNum)
-	overItems, err := nntpClient.Over(fetchStartNum, fetchEndNum) // Fetches articles in the range [fetchStartNum, fetchEndNum]
+	fmt.Printf("Attempting to fetch overview for articles %d-%d\n", beginArticleNum, endArticleNum)
+	overviews, err := conn.Overview(beginArticleNum, endArticleNum)
 	if err != nil {
-		log.Fatalf("Failed to get overview for articles %d-%d: %v", fetchStartNum, fetchEndNum, err)
+		// Check if the error is because the range is invalid (e.g., group became empty)
+		if nntpErr, ok := err.(nntp.Error); ok && nntpErr.Code == 423 { // 423 No articles in specified range
+			fmt.Printf("No articles found in range %d-%d (server response: %s)\n", beginArticleNum, endArticleNum, err.Error())
+			return
+		}
+		log.Fatalf("Failed to get overview for articles %d-%d: %v", beginArticleNum, endArticleNum, err)
 	}
 
-	// Sort OverItems by article number descending if necessary, though OVER usually returns them sorted.
-	// The library might already sort them or return as is. We need the newest first.
-	// The request is for the "most recent 10 messages". So we need to display them from newest to oldest.
-	// `groupInfo.High` is the newest. So items should be processed from highest number to lowest.
-	// The `overItems` from `Over(start, end)` should be in ascending order of article number.
-	// We need to reverse this for display or pick the correct slice.
-
-	// Filter down to the actual number of messages requested, from the newest ones.
-	actualMessages := []nntpclient.OverItem{}
-	for i := len(overItems) - 1; i >= 0 && len(actualMessages) < *messageCount; i-- {
-		actualMessages = append(actualMessages, overItems[i])
+	if len(overviews) == 0 {
+		fmt.Println("No overview data received for the specified range.")
+		return
 	}
-
 
 	fmt.Println("\nRecent Messages:")
-	for _, item := range actualMessages {
-		// The OverItem struct has Subject, From, Date, MessageId
-		// Date format from NNTP OVER command can vary. Let's see what we get.
-		// Standard mail date format is "Date: Mon, 2 Jan 2006 15:04:05 -0700 (MST)"
-		// The `OverItem.Date` field should contain this.
-		fmt.Printf("Article: %s\n", item.Number) // item.Number is a string
+	// The Overview command usually returns messages sorted by number.
+	// We want newest first, so iterate from the end of the slice.
+	// The number of items in 'overviews' might be less than 'numToFetch' if some articles are missing in the range.
+	// We should display up to 'numToFetch' messages from the received 'overviews', newest first.
+
+	displayCount := 0
+	for i := len(overviews) - 1; i >= 0 && displayCount < *messageCount ; i-- {
+		item := overviews[i]
+		// Format the date. The nntp.MessageOverview.Date is a time.Time object.
+		dateStr := "N/A"
+		if !item.Date.IsZero() {
+			dateStr = item.Date.Format(time.RFC1123Z) // Common format like "Mon, 02 Jan 2006 15:04:05 -0700"
+		}
+
+		fmt.Printf("Article: %d\n", item.MessageNumber)
 		fmt.Printf("  Subject: %s\n", item.Subject)
 		fmt.Printf("  From: %s\n", item.From)
-		fmt.Printf("  Date: %s\n", item.Date)
+		fmt.Printf("  Date: %s\n", dateStr)
 		fmt.Printf("  Message-ID: %s\n", item.MessageId)
 		fmt.Println("---")
-	}
-
-	// Attempt to gracefully quit
-	_, _, err = nntpClient.Command("QUIT", 205) // 205 Service closing transmission channel
-	if err != nil {
-		// Log non-fatal error as we are exiting anyway
-		log.Printf("Error sending QUIT command: %v (this might be expected if server closes connection first)", err)
+		displayCount++
 	}
 }

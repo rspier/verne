@@ -1,6 +1,4 @@
-github.com/dustin/go-couch v0.0.0-20160816170231-8251128dab73/go.mod h1:WG/TWzFd/MRvOZ4jjna3FQ+K8AKhb2jOw4S2JMw9VKI=
-github.com/dustin/go-nntp v0.0.0-20210723005859-f00d51cf8cc1 h1:R90ND7acg9HKYj3oJBKKefk73DULdC7IlcnS7MV0X1s=
-github.com/dustin/go-nntp v0.0.0-20210723005859-f00d51cf8cc1/go.mod h1:elGbp3dKCIIdwu6jm3y6L93EVn+I6MSzYrcZXhpNS3Y=
-github.com/dustin/httputil v0.0.0-20170305193905-c47743f54f89/go.mod h1:ZoDWdnxro8Kesk3zrCNOHNFWtajFPSnDMjVEjGjQu/0=
 github.com/kothawoc/go-nntp v0.0.0-20240913133817-493af604c9fb h1:MXKOjzlk+TxCdZBU0uMJsT+NFCmLqxPwvej4ow7k9kQ=
 github.com/kothawoc/go-nntp v0.0.0-20240913133817-493af604c9fb/go.mod h1:JykCpxJYIsGassYh0brIBtqpu2UQWsCrqCtJ3VSXyRI=
+github.com/willglynn/nntp v0.0.0-20141028183654-faf514d19a62 h1:vBbKc13NYH/qPPGae8GC6ZeOYUuaLPs2h6AlC4so1XI=
+github.com/willglynn/nntp v0.0.0-20141028183654-faf514d19a62/go.mod h1:XTF7qVyoc+UAmskPaMpzaJzYT9cHAwec6WsiIE3OHOs=
