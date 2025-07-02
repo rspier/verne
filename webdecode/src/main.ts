@@ -1,9 +1,9 @@
 // --- Type Declarations for Global Libraries (loaded via CDN) ---
 declare var jsQR: any; // jsQR library
 declare var xxhash: any; // xxhash-wasm library
-// Assuming the 'ascii85' npm package (loaded from unpkg) exposes a global 'ascii85' object
-// with a 'decode' method. The return type might be a Buffer or Uint8Array.
-declare var ascii85: { decode: (input: string) => Uint8Array | { type: 'Buffer', data: number[] } };
+// Assuming the 'base85' npm package (loaded from unpkg) exposes a global 'base85' object
+// with a 'decode' method. It might take a variant argument.
+declare var base85: { decode: (input: string, variant?: string) => Uint8Array | { type: 'Buffer', data: number[] } | string }; // Some libs return string, needs check
 declare var ZstdDec: { decompress: (compressedData: Uint8Array) => Uint8Array }; // Placeholder for ZSTD lib
 
 // --- DOM Element References ---
@@ -318,26 +318,34 @@ function processFrame() {
             const ascii85Payload = code.data;
             let finalPayloadBytes: Uint8Array;
             try {
-                // Decode ASCII85 using the assumed global 'ascii85' library
-                if (typeof ascii85 === 'undefined' || typeof ascii85.decode !== 'function') {
-                    throw new Error("ASCII85 decoding library ('ascii85.decode') not found or not a function. Please ensure it's loaded correctly (e.g., via CDN).");
+                // Decode ASCII85 using the assumed global 'base85' library
+                if (typeof base85 === 'undefined' || typeof base85.decode !== 'function') {
+                    throw new Error("Base85 decoding library ('base85.decode') not found or not a function. Please ensure it's loaded correctly (e.g., via CDN).");
                 }
-                let decodedOutput = ascii85.decode(ascii85Payload);
+                // Attempt to specify 'ascii85' variant if the library supports it.
+                // The Go encoder uses Adobe's flavor of ASCII85.
+                let decodedOutput = base85.decode(ascii85Payload, 'ascii85');
 
                 // Check if the output is a Node.js-like Buffer object and convert if necessary
-                // This is a common pattern for libraries that work in both Node and browser (via shims/globals)
                 if (decodedOutput && (decodedOutput as any).type === 'Buffer' && Array.isArray((decodedOutput as any).data)) {
                     finalPayloadBytes = new Uint8Array((decodedOutput as any).data);
                 } else if (decodedOutput instanceof Uint8Array) {
                     finalPayloadBytes = decodedOutput;
+                } else if (typeof decodedOutput === 'string') {
+                    // Some base85 libraries might decode to a binary string, similar to atob. Convert this.
+                    finalPayloadBytes = new Uint8Array(decodedOutput.length);
+                    for (let i = 0; i < decodedOutput.length; i++) {
+                        finalPayloadBytes[i] = decodedOutput.charCodeAt(i);
+                    }
                 } else {
-                    throw new Error("ASCII85 decode function did not return a Uint8Array or a recognized Buffer-like object.");
+                    console.error("Unrecognized ASCII85 decode output:", decodedOutput);
+                    throw new Error("ASCII85 decode function returned an unrecognized type.");
                 }
 
             } catch (e: any) {
                 t5 = performance.now(); // Still record time up to the error
                 dataProcessingDuration = t5 - t4;
-                updateStatus(`Frame ${frameCounter}: Error ASCII85-decoding payload: ${e.message} (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
+                updateStatus(`Frame ${frameCounter}: Error Base85-decoding payload (variant ascii85): ${e.message} (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
                 timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms (ERR), Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
                 return;
             }
