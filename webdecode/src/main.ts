@@ -258,7 +258,16 @@ function initZstdCodec(): Promise<void> {
                     reject(new Error(errMsg));
                     return;
                 }
+                console.log("[initZstdCodec] Inside ZstdCodec.run callback. 'zstd' object:", zstd);
+                if (!zstd || !zstd.Simple) {
+                    const errMsg = "ZSTD API (zstd.Simple) not available after ZstdCodec.run().";
+                    console.error("[initZstdCodec]", errMsg, "zstd object:", zstd);
+                    updateStatus(errMsg, true);
+                    reject(new Error(errMsg));
+                    return;
+                }
                 zstdSimple = new zstd.Simple();
+                console.log("[initZstdCodec] zstdSimple instance created:", zstdSimple);
                 updateStatus("ZSTD Codec initialized successfully.");
                 resolve();
             });
@@ -523,6 +532,17 @@ function processFrame() {
             updateStatus(`Frame ${frameCounter}: Chunk ${sequenceNum} (of ${totalChunksExpected > 0 ? totalChunksExpected : '?'}, len ${dataLength}) OK. (DataProc: ${dataProcessingDuration.toFixed(1)}ms) Total unique: ${collectedChunks.size}.`);
             timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms, Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
 
+            // Check for auto-stop condition
+            if (totalChunksExpected !== -1 && collectedChunks.size === totalChunksExpected) {
+                if (frameProcessorIntervalId !== null) { // Check if already stopping/stopped
+                    updateStatus(`All ${totalChunksExpected} chunks received. Auto-stopping capture...`);
+                    console.log(`All ${totalChunksExpected} chunks received. Auto-stopping capture.`);
+                    stopCapture();
+                    // Note: stopCapture itself clears frameProcessorIntervalId,
+                    // so this check ensures stopCapture is effectively called once.
+                }
+            }
+
         } else { // No QR code found
             updateStatus(`Frame ${frameCounter}: No QR code found (Scan: ${scanDuration.toFixed(1)}ms).`);
             timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ---, Total: ${(captureDuration + scanDuration).toFixed(1)}ms`;
@@ -537,6 +557,7 @@ function processFrame() {
 
 
 function assembleData() {
+    console.log("[assembleData] Called. Current zstdSimple state:", zstdSimple);
     if (!outputTextarea || !downloadLink || !fileNameInput || !progressOverview) {
         updateStatus("Cannot assemble data: critical HTML elements missing.", true);
         return;
