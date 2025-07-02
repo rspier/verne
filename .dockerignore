@@ -1,0 +1,29 @@
+# Git specific
+.git
+.gitignore
+
+# Go specific
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.prof
+
+# Local build artifacts or vendor directories if not checked in
+# vendor/
+# bin/
+# build/
+
+# IDE / OS specific
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Readme and other docs not needed in image
+README.md
+AGENTS.md
+LICENSE
+# Add any other files or directories to ignore

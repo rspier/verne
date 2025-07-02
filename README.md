@@ -20,11 +20,12 @@ It aims to provide a user-friendly interface for reading articles and navigating
 
 ## Tech Stack
 
-*   Go (using standard library `html/template` and `net/http`)
+*   Go (using standard library `html/template`, `net/http`, `net/textproto` for basic NNTP)
 *   MySQL (for caching/indexing NNTP data, schema based on [Colobus3 SQL](https://github.com/perlorg/cnntp/blob/main/sql/colobus3.sql))
-*   `github.com/google/safehtml` for secure HTML generation.
+*   `github.com/google/safehtml` (Note: currently using `html/template` for parsing due to `embed.FS` issues with `safehtml/template v0.1.0`, `safehtml` types would be used for data if needed).
 *   `github.com/go-sql-driver/mysql` for MySQL database connectivity.
 *   `github.com/DATA-DOG/go-sqlmock` for database testing.
+*   Docker (for containerized deployment)
 
 ## Prerequisites
 
@@ -59,5 +60,29 @@ It aims to provide a user-friendly interface for reading articles and navigating
 *   `-db-pass`: Database password (default: `password`)
 *   `-db-name`: Database name (default: `nntp_cache`)
 *   `-server-port`: HTTP server port (default: `8080`)
-*   `-nntp-server`: Backend NNTP server address (host:port) (default: `news.example.com:119`) - Currently used by a placeholder client.
+*   `-nntp-server`: Backend NNTP server address (host:port) (default: `news.example.com:119`) - Used by the internal NNTP client to fetch article bodies.
+```
+
+## Docker Build and Run
+
+1.  **Build the Docker image:**
+    ```bash
+    docker build -t nntp-web-app .
+    ```
+
+2.  **Run the Docker container:**
+    Make sure to replace placeholder values for database connection and the NNTP server.
+    The application inside the container listens on port 8080 by default (or as specified by `-server-port`).
+    ```bash
+    docker run -p 8080:8080 --rm nntp-web-app \
+        -db-host=your_mysql_host \
+        -db-port=3306 \
+        -db-user=your_db_user \
+        -db-pass=your_db_password \
+        -db-name=your_db_name \
+        -nntp-server=your_nntp_server:119
+    ```
+    *   `your_mysql_host`: If MySQL is running on your host machine, you might use `host.docker.internal` (on Docker Desktop) or your machine's IP address. If it's another Docker container, use its container name and ensure they are on the same Docker network.
+    *   `-p 8080:8080`: Maps port 8080 of your host to port 8080 in the container.
+    *   `--rm`: Automatically removes the container when it exits.
 ```
