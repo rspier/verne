@@ -11,9 +11,8 @@ interface ZstdApi {
     Simple: new () => ZstdSimpleApi;
     // Streaming, Dict APIs can be added if needed
 }
-declare var ZstdCodec: {
-    run: (onReady: (zstd: ZstdApi) => void) => void;
-};
+// Using 'any' for ZstdCodec for now to probe its structure at runtime, as v0.1.5 UMD might differ.
+declare var ZstdCodec: any;
 
 // --- Global instances for initialized libraries ---
 let h64: any = null; // For xxhash
@@ -243,36 +242,51 @@ function initZstdCodec(): Promise<void> {
             resolve();
             return;
         }
-        if (typeof ZstdCodec === 'undefined' || typeof ZstdCodec.run !== 'function') {
-            const errMsg = "ZstdCodec global object or .run method not found. Ensure zstd-codec.js is loaded.";
+        updateStatus("Attempting to initialize ZSTD Codec...");
+
+        if (typeof ZstdCodec === 'undefined') {
+            const errMsg = "ZstdCodec global object not found. Ensure zstd-codec.js from CDN is loaded correctly.";
+            console.error("[initZstdCodec]", errMsg);
             updateStatus(errMsg, true);
             reject(new Error(errMsg));
             return;
         }
+
         try {
-            updateStatus("Initializing ZSTD Codec (WASM)...");
-            ZstdCodec.run((zstd: ZstdApi) => {
-                if (!zstd || !zstd.Simple) {
-                    const errMsg = "ZSTD API (zstd.Simple) not available after ZstdCodec.run().";
-                    updateStatus(errMsg, true);
-                    reject(new Error(errMsg));
-                    return;
-                }
-                console.log("[initZstdCodec] Inside ZstdCodec.run callback. 'zstd' object:", zstd);
-                if (!zstd || !zstd.Simple) {
-                    const errMsg = "ZSTD API (zstd.Simple) not available after ZstdCodec.run().";
-                    console.error("[initZstdCodec]", errMsg, "zstd object:", zstd);
-                    updateStatus(errMsg, true);
-                    reject(new Error(errMsg));
-                    return;
-                }
-                zstdSimple = new zstd.Simple();
-                console.log("[initZstdCodec] zstdSimple instance created:", zstdSimple);
-                updateStatus("ZSTD Codec initialized successfully.");
+            // Try direct instantiation (common for UMD builds of Emscripten modules if .run isn't used,
+            // or if the global ZstdCodec IS the 'zstd' api object itself)
+            if (typeof ZstdCodec.Simple === 'function') {
+                zstdSimple = new ZstdCodec.Simple();
+                updateStatus("ZSTD Codec (Simple API) initialized directly from ZstdCodec.Simple.");
+                console.log("[initZstdCodec] zstdSimple instance created directly from ZstdCodec.Simple:", zstdSimple);
                 resolve();
-            });
+            }
+            // Fallback to .run method if Simple isn't direct (newer/documented API style)
+            else if (typeof ZstdCodec.run === 'function') {
+                updateStatus("Initializing ZSTD Codec via ZstdCodec.run()...");
+                ZstdCodec.run((zstd: ZstdApi) => { // zstd here is the API object passed by the callback
+                    console.log("[initZstdCodec] Inside ZstdCodec.run callback. 'zstd' api object:", zstd);
+                    if (!zstd || typeof zstd.Simple !== 'function') { // Check zstd.Simple here
+                        const errMsg = "ZSTD API (zstd.Simple) not available after ZstdCodec.run().";
+                        console.error("[initZstdCodec]", errMsg, "zstd api object:", zstd);
+                        updateStatus(errMsg, true);
+                        reject(new Error(errMsg));
+                        return;
+                    }
+                    zstdSimple = new zstd.Simple(); // Use the 'zstd' from callback
+                    updateStatus("ZSTD Codec initialized successfully via .run().");
+                    console.log("[initZstdCodec] zstdSimple instance created via ZstdCodec.run callback:", zstdSimple);
+                    resolve();
+                });
+            } else {
+                const errMsg = "ZstdCodec is defined, but neither a direct .Simple constructor nor a .run method was found. Incompatible/Unknown API structure.";
+                console.error("[initZstdCodec]", errMsg, "ZstdCodec object:", ZstdCodec);
+                updateStatus(errMsg, true);
+                reject(new Error(errMsg));
+            }
         } catch (err: any) {
-            const errMsg = `Error during ZstdCodec.run() call: ${err.message || err}`;
+            const errMsg = `Error initializing ZSTD Codec: ${err.message || err}`;
+            console.error("[initZstdCodec]", errMsg, err);
             updateStatus(errMsg, true);
             reject(new Error(errMsg));
         }
