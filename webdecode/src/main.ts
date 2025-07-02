@@ -622,16 +622,16 @@ function assembleData() {
 
     let finalDecompressedData: Uint8Array;
     try {
-        // Ensure fflate and its unzstd method are available
-        if (typeof fflate === 'undefined' || typeof fflate.unzstd !== 'function') {
-            throw new Error("ZSTD Decompression library (fflate.unzstd) not found or not a function. Ensure fflate is loaded.");
+        // Use the initialized zstdSimple from ZstdCodec
+        if (!zstdSimple) {
+            throw new Error("ZSTD Codec (zstdSimple API) not initialized. Cannot decompress.");
         }
-        finalDecompressedData = fflate.unzstd(reassembledCompressedData); // Use fflate
-        updateStatus(`Data decompressed successfully using fflate. Original size: ${finalDecompressedData.length} bytes.`);
+        finalDecompressedData = zstdSimple.decompress(reassembledCompressedData);
+        updateStatus(`Data decompressed successfully using ZstdCodec. Original size: ${finalDecompressedData.length} bytes.`);
     } catch (err: any) {
-        updateStatus(`Error during ZSTD decompression with fflate: ${err.message || err}. Displaying raw compressed data instead.`, true);
+        updateStatus(`Error during ZSTD decompression with ZstdCodec: ${err.message || err}. Displaying raw compressed data instead.`, true);
         finalDecompressedData = reassembledCompressedData;
-        outputTextarea.value = "<Error during ZSTD decompression (fflate). Raw (compressed) data might be available for download.>";
+        outputTextarea.value = "<Error during ZSTD decompression (ZstdCodec). Raw (compressed) data might be available for download.>";
     }
 
 
