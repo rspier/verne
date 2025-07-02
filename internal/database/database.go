@@ -56,6 +56,12 @@ func (db *DB) Close() error {
 	return nil
 }
 
+// NewWithSQLDB is a constructor for testing purposes, allowing injection of a custom *sql.DB.
+// This should only be used in tests.
+func NewWithSQLDB(sqlDb *sql.DB) *DB {
+	return &DB{sqlDB: sqlDb}
+}
+
 // GetAllNewsgroups retrieves all newsgroups from the database, ordered by name.
 func (db *DB) GetAllNewsgroups() ([]models.Newsgroup, error) {
 	query := "SELECT id, name, description FROM `groups` ORDER BY name" // Backticks for table name
@@ -69,11 +75,7 @@ func (db *DB) GetAllNewsgroups() ([]models.Newsgroup, error) {
 	for rows.Next() {
 		var group models.Newsgroup
 		if err := rows.Scan(&group.ID, &group.Name, &group.Description); err != nil {
-			// Log the error and continue if possible, or return immediately
-			log.Printf("Error scanning group row: %v", err)
-			// Depending on policy, you might want to return error immediately
-			// return nil, fmt.Errorf("failed to scan group row: %w", err)
-			continue // Skip this row if scanning fails
+			return nil, fmt.Errorf("failed to scan group row: %w", err) // Return error immediately
 		}
 		groups = append(groups, group)
 	}

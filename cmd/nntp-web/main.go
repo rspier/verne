@@ -1,11 +1,15 @@
 package main
 
 import (
-	"fmt"
+	// "fmt" // Was unused
 	"log"
+	"net/http" // For http.ErrServerClosed
 	"os"
 
 	"nntp-web/internal/config"
+	"nntp-web/internal/database"   // Added
+	"nntp-web/internal/nntpclient" // Added
+	"nntp-web/internal/server"     // Added
 )
 
 func main() {

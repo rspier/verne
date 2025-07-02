@@ -1,35 +1,35 @@
 package server
 
 import (
-	"fmt
+	"fmt"
 	"log"
 	"net/http"
 
 	"nntp-web/internal/config"
 	"nntp-web/internal/database"
-	"nntp-web/web/templates" // Import for embedded templates
-
-	"github.com/google/safehtml/template"
+	"html/template"                // Changed from safehtml/template
+	"nntp-web/internal/nntpclient"
+	// "nntp-web/internal/config"  // Removed duplicate
+	// "nntp-web/internal/database" // Removed duplicate
+	"nntp-web/web/templates"       // Import for embedded templates
+	"strings"                      // Added
 )
 
 // Server holds the dependencies for the HTTP server.
 type Server struct {
 	config     *config.Config
 	db         *database.DB
-	nntpClient *nntpclient.Client // Added NNTP client
+	nntpClient *nntpclient.Client
 	router     *http.ServeMux
-	templates  *template.Template
+	templates  *template.Template // Now html/template.Template
 }
 
 // NewServer creates and configures a new server instance.
 func NewServer(cfg *config.Config, db *database.DB, nntpCli *nntpclient.Client) (*Server, error) {
-	// Parse templates
-	// Using template.Must to panic if parsing fails, as it's a startup error.
-	parsedTemplates, err := template.New("").
-		Funcs(template.FuncMap{
-			// Add any custom template functions here if needed in the future
-		}).
-		ParseFS(templates.Get(), "*.html.tmpl")
+	// Parse templates using html/template
+	t := template.New("base")
+	// Add Funcs here if needed: t = t.Funcs(template.FuncMap{...})
+	parsedTemplates, err := t.ParseFS(templates.Files, "*.html.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse templates: %w", err)
 	}
@@ -37,9 +37,9 @@ func NewServer(cfg *config.Config, db *database.DB, nntpCli *nntpclient.Client) 
 	srv := &Server{
 		config:     cfg,
 		db:         db,
-		nntpClient: nntpCli, // Assign passed NNTP client
+		nntpClient: nntpCli,
 		router:     http.NewServeMux(),
-		templates:  parsedTemplates,
+		templates:  parsedTemplates, // This is now *html.template.Template
 	}
 
 	srv.setupRoutes()
@@ -73,30 +73,30 @@ func (s *Server) routeGroupRequests(w http.ResponseWriter, r *http.Request) {
 
 	// Check for Message-ID lookup: /group/{groupname}/;.msgid={messageid}
 	// The actual path for this is /group/{groupname}/ and ;.msgid is a query parameter.
-	if queryMsgID := r.URL.Query().Get(";.msgid"); queryMsgID != "" {
-		// Path should be /group/{groupname}/ for this to be valid.
-		// Example: /group/perl.test/;.msgid=foo@bar
-		// parts here for "/group/perl.test/" would be ["perl.test", ""]
-		if len(parts) > 0 && parts[0] != "" { // parts[0] is groupname
-			// If path is just /group/groupname/ (len(parts)==2, parts[1]=="")
-			// or /group/groupname (len(parts)==1)
-			// This is valid for ;.msgid lookup.
-			s.handleShowArticle()(w, r)
-			return
-		}
-	}
+	rawQuery := r.URL.RawQuery // Keep for logging if needed elsewhere
+	log.Printf("routeGroupRequests: Path=[%s], RawQuery=[%s]", path, rawQuery)
 
-	// At this point, parts[0] is the groupName.
-	// parts: [groupName, yearOrPossibleEmpty, monthOrMsg, possibleMsgID]
+	// Case 1: /group/ (list all groups) - Handled at the top by 'if path == "/group/"'
 
-	// Case 2: /group/{groupname}/{year}/{month}/msg{id}.html (specific article)
-	// e.g., /group/foo/2024/01/msg123.html -> parts: ["foo", "2024", "01", "msg123.html"]
-	if len(parts) == 4 && strings.HasPrefix(parts[3], "msg") && strings.HasSuffix(parts[3], ".html") {
+	// parts[0] is groupName, parts[1] could be year or ";.msgid=..." or empty (for trailing slash)
+
+	// Case 2: /group/{groupname}/;.msgid={id} (article by message ID)
+	// path: /group/foo/;.msgid=bar -> parts: ["foo", ";.msgid=bar"]
+	if len(parts) == 2 && parts[0] != "" && strings.HasPrefix(parts[1], ";.msgid=") {
+		log.Printf("routeGroupRequests: Matched ;.msgid path pattern, routing to handleShowArticle for path %s", path)
 		s.handleShowArticle()(w, r)
 		return
 	}
 
-	// Case 3: /group/{groupname}/{year}/{month}.html (specific month message list)
+	// Case 3: /group/{groupname}/{year}/{month}/msg{id}.html (specific article by details)
+	// path: /group/foo/2024/01/msg123.html -> parts: ["foo", "2024", "01", "msg123.html"]
+	if len(parts) == 4 && parts[0] != "" && strings.HasPrefix(parts[3], "msg") && strings.HasSuffix(parts[3], ".html") {
+		log.Printf("routeGroupRequests: Matched canonical article path pattern, routing to handleShowArticle for path %s", path)
+		s.handleShowArticle()(w, r)
+		return
+	}
+
+	// Case 4: /group/{groupname}/{year}/{month}.html (specific month message list)
 	// e.g., /group/foo/2024/01.html -> parts: ["foo", "2024", "01.html"]
 	if len(parts) == 3 && strings.HasSuffix(parts[2], ".html") {
 		s.handleListMessages()(w, r)

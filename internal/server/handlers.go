@@ -1,9 +1,15 @@
 package server
 
 import (
+	"database/sql" // For sql.ErrNoRows
+	"errors"       // For errors.Is
+	"fmt"          // For fmt.Sprintf
 	"log"
 	"net/http"
 	"nntp-web/web/templates" // For template name constants
+	"strconv"      // For strconv.Atoi, strconv.ParseUint
+	"strings"      // For strings.Split, strings.Trim, etc.
+	"time"         // For time.Now, time.Date
 )
 
 // handleListGroups handles requests to list all newsgroups.
@@ -113,121 +119,117 @@ func (s *Server) handleListMessages() http.HandlerFunc {
 func (s *Server) handleShowArticle() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
-		query := r.URL.Query()
+		// Path parts relative to / (e.g., ["group", "groupname", ";.msgid=value"] or ["group", "groupname", "Y", "M", "msgN.html"])
+		pathSegs := strings.Split(strings.Trim(path, "/"), "/")
 
-		// Check for Message-ID lookup first
-		if msgIDVal := query.Get(";.msgid"); msgIDVal != "" {
-			// Path should be /group/{groupname}/
-			parts := strings.Split(strings.Trim(path, "/"), "/")
-			if len(parts) != 2 || parts[0] != "group" {
-				log.Printf("Invalid path for Message-ID lookup: %s", path)
-				http.Error(w, "Invalid request for Message-ID lookup.", http.StatusBadRequest)
+		// Type 1: Path-based Message-ID lookup: /group/{groupname}/;.msgid={messageid}
+		// pathSegs: ["group", "groupname", ";.msgid=value"]
+		if len(pathSegs) == 3 && pathSegs[0] == "group" && strings.HasPrefix(pathSegs[2], ";.msgid=") {
+			// groupNameFromPath := pathSegs[1] // Available if needed for context, but GetArticleByMessageID is global
+			msgIDVal := strings.TrimPrefix(pathSegs[2], ";.msgid=")
+
+			if msgIDVal == "" {
+				http.Error(w, "Missing Message-ID for lookup.", http.StatusBadRequest)
 				return
 			}
-			// groupNameFromPath := parts[1] // groupNameFromPath is not strictly needed if Message-ID is global unique in DB
 
 			article, err := s.db.GetArticleByMessageID(msgIDVal)
 			if err != nil {
 				if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "not found") {
-					log.Printf("Article with Message-ID '%s' not found for redirect. Error: %v", msgIDVal, err)
+					log.Printf("Article with Message-ID '%s' not found (path lookup). Error: %v", msgIDVal, err)
 					http.Error(w, fmt.Sprintf("Article with Message-ID %s not found.", msgIDVal), http.StatusNotFound)
 				} else {
-					log.Printf("Error fetching article by Message-ID '%s': %v", msgIDVal, err)
+					log.Printf("Error fetching article by Message-ID '%s' (path lookup): %v", msgIDVal, err)
 					http.Error(w, "Failed to retrieve article by Message-ID.", http.StatusInternalServerError)
 				}
 				return
 			}
 
-			// Construct canonical URL and redirect
 			canonicalURL := fmt.Sprintf("/group/%s/%d/%02d/msg%d.html",
 				article.GroupName,
 				article.Received.Year(),
 				article.Received.Month(),
 				article.ArticleNum,
 			)
-			http.Redirect(w, r, canonicalURL, http.StatusFound) // 302 Found
+			http.Redirect(w, r, canonicalURL, http.StatusFound)
 			return
 		}
 
-		// Canonical path: /group/{groupname}/{year}/{month}/msg{id}.html
-		// Example: /group/comp.lang.go/2024/01/msg123.html
-		// parts: ["group", "comp.lang.go", "2024", "01", "msg123.html"]
-		parts := strings.Split(strings.Trim(path, "/"), "/")
-		if len(parts) != 5 || parts[0] != "group" || !strings.HasPrefix(parts[4], "msg") || !strings.HasSuffix(parts[4], ".html") {
-			http.NotFound(w, r)
-			return
-		}
+		// Type 2: Canonical path: /group/{groupname}/{year}/{month}/msg{id}.html
+		// pathSegs: ["group", "groupname", "year", "month", "msgID.html"]
+		if len(pathSegs) == 5 && pathSegs[0] == "group" && strings.HasPrefix(pathSegs[4], "msg") && strings.HasSuffix(pathSegs[4], ".html") {
+			groupName := pathSegs[1]
+			yearStr, monthStr := pathSegs[2], pathSegs[3]
+			articleNumStr := strings.TrimSuffix(strings.TrimPrefix(pathSegs[4], "msg"), ".html")
 
-		groupName := parts[1]
-		yearStr, monthStr := parts[2], parts[3]
-		articleNumStr := strings.TrimSuffix(strings.TrimPrefix(parts[4], "msg"), ".html")
+			year, errY := strconv.Atoi(yearStr)
+			month, errM := strconv.Atoi(monthStr)
+			articleNum64, errA := strconv.ParseUint(articleNumStr, 10, 32)
+			articleNum := uint32(articleNum64)
 
-		year, errY := strconv.Atoi(yearStr)
-		month, errM := strconv.Atoi(monthStr)
-		articleNum64, errA := strconv.ParseUint(articleNumStr, 10, 32)
-		articleNum := uint32(articleNum64)
+			if errY != nil || errM != nil || errA != nil || month < 1 || month > 12 {
+				log.Printf("Invalid article path format (canonical): %s. Year: %s, Month: %s, Num: %s", path, yearStr, monthStr, articleNumStr)
+				http.Error(w, "Invalid article path format.", http.StatusBadRequest)
+				return
+			}
 
-		if errY != nil || errM != nil || errA != nil || month < 1 || month > 12 {
-			log.Printf("Invalid article path format: %s. Year: %s, Month: %s, Num: %s", path, yearStr, monthStr, articleNumStr)
-			http.Error(w, "Invalid article path format.", http.StatusBadRequest)
-			return
-		}
+			// The rest of the logic for canonical path (fetch by details, date redirect, render)
+			article, err := s.db.GetArticleByDetails(groupName, year, month, articleNum)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "not found"){
+					log.Printf("Article not found by details: group %s, path %s. Error: %v", groupName, path, err)
+					http.Error(w, "Article not found.", http.StatusNotFound)
+				} else {
+					log.Printf("Error fetching article by details: group %s, path %s. Error: %v", groupName, path, err)
+					http.Error(w, "Failed to retrieve article.", http.StatusInternalServerError)
+				}
+				return
+			}
 
-		article, err := s.db.GetArticleByDetails(groupName, year, month, articleNum)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "not found"){
-				log.Printf("Article not found by details: group %s, path %s. Error: %v", groupName, path, err)
-				http.Error(w, "Article not found.", http.StatusNotFound)
+			// Check if URL's year/month matches article's actual received year/month for canonical redirect
+			if article.Received.Year() != year || int(article.Received.Month()) != month {
+				log.Printf("Date mismatch for article %d in group %s. URL: %d/%d, Article: %d/%d. Redirecting.",
+					articleNum, groupName, year, month, article.Received.Year(), article.Received.Month())
+				canonicalURL := fmt.Sprintf("/group/%s/%d/%02d/msg%d.html",
+					article.GroupName,
+					article.Received.Year(),
+					article.Received.Month(),
+					article.ArticleNum,
+				)
+				http.Redirect(w, r, canonicalURL, http.StatusFound)
+				return
+			}
+
+			// Fetch thread messages
+			threadMessages, err := s.db.GetThreadMessages(article.ThreadID, article.GroupID, article.ArticleNum)
+			if err != nil {
+				log.Printf("Error fetching thread messages for article %s (thread %d): %v", article.MessageID, article.ThreadID, err)
+			}
+
+			var articleBody string
+			var bodyErr error
+			if s.nntpClient != nil {
+				articleBody, bodyErr = s.nntpClient.FetchArticleBody(article.MessageID, article.GroupName)
+				if bodyErr != nil {
+					log.Printf("Error fetching article body for %s from NNTP: %v", article.MessageID, bodyErr)
+				}
 			} else {
-				log.Printf("Error fetching article by details: group %s, path %s. Error: %v", groupName, path, err)
-				http.Error(w, "Failed to retrieve article.", http.StatusInternalServerError)
+				log.Println("NNTP client not initialized, cannot fetch article body.")
+				articleBody = "[NNTP client not available to fetch body]"
 			}
+
+			data := map[string]interface{}{
+				"Article":        article,
+				"ThreadMessages": threadMessages,
+				"ArticleBody":    articleBody,
+			}
+			s.renderTemplate(w, r, templates.ArticleView, data)
 			return
 		}
 
-		// Check if URL's year/month matches article's actual received year/month for canonical redirect
-		if article.Received.Year() != year || int(article.Received.Month()) != month {
-			log.Printf("Date mismatch for article %d in group %s. URL: %d/%d, Article: %d/%d. Redirecting.",
-				articleNum, groupName, year, month, article.Received.Year(), article.Received.Month())
-			canonicalURL := fmt.Sprintf("/group/%s/%d/%02d/msg%d.html",
-				article.GroupName, // Use article.GroupName in case it was different (though GetArticleByDetails uses input groupName)
-				article.Received.Year(),
-				article.Received.Month(),
-				article.ArticleNum,
-			)
-			http.Redirect(w, r, canonicalURL, http.StatusFound) // 302 Found
-			return
-		}
-
-		// Fetch thread messages
-		threadMessages, err := s.db.GetThreadMessages(article.ThreadID, article.GroupID, article.ArticleNum)
-		if err != nil {
-			// Log error but don't fail the whole page load for this
-			log.Printf("Error fetching thread messages for article %s (thread %d): %v", article.MessageID, article.ThreadID, err)
-		}
-
-		// Fetch article body (placeholder)
-		// In a real app, initialize s.nntpClient in Server struct and main.go
-		var articleBody string
-		var bodyErr error
-		if s.nntpClient != nil { // Check if nntpClient is available
-			articleBody, bodyErr = s.nntpClient.FetchArticleBody(article.MessageID, article.GroupName)
-			if bodyErr != nil {
-				log.Printf("Error fetching article body for %s from NNTP: %v", article.MessageID, bodyErr)
-				// articleBody will remain empty or you can set a message like "Body could not be retrieved"
-			}
-		} else {
-			log.Println("NNTP client not initialized, cannot fetch article body.")
-			articleBody = "[NNTP client not available to fetch body]"
-		}
-
-
-		data := map[string]interface{}{
-			"Article":        article,
-			"ThreadMessages": threadMessages,
-			"ArticleBody":    articleBody, // Pass the fetched or placeholder body
-			// Add breadcrumb data or other necessary display items
-		}
-		s.renderTemplate(w, r, templates.ArticleView, data)
-	}
-}
+		// If path structure is not recognized by this handler
+		log.Printf("handleShowArticle: Path structure not recognized: %s", path)
+		http.NotFound(w, r)
+		// Return is implicit here if http.NotFound writes response and this is end of function block
+	} // This is the end of the returned http.HandlerFunc
+} // This is the end of handleShowArticle method

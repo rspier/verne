@@ -1,10 +1,17 @@
 package database
 
 import (
+	"database/sql" // Added for sql.ErrNoRows
 	"database/sql/driver"
+	"errors" // Added for errors.New
+	"fmt"    // Added for fmt.Sprintf
+	"reflect" // Added for reflect.DeepEqual
 	"regexp"
+	"strings" // Added for strings.Contains
 	"testing"
+	"time" // Added for time.Date
 
+	// "nntp-web/internal/config" // Removed: unused after cfg was commented out
 	"nntp-web/internal/models"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -17,7 +24,8 @@ func TestDB_GetAllNewsgroups(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	db := &DB{sqlDB: mockDB} // Inject mock DB into our DB struct
+	// db := &DB{sqlDB: mockDB} // Inject mock DB into our DB struct
+	db := NewWithSQLDB(mockDB) // Use the test constructor for consistency
 
 	query := "SELECT id, name, description FROM `groups` ORDER BY name"
 
@@ -398,25 +406,21 @@ func TestDB_GetAllNewsgroups_ScanError(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	db := &DB{sqlDB: mockDB}
+	// db := &DB{sqlDB: mockDB}
+	db := NewWithSQLDB(mockDB) // Use the test constructor
 	query := "SELECT id, name, description FROM `groups` ORDER BY name"
 
-	// Simulate a row that's fine, then one that causes a scan error (e.g., wrong type)
-	// sqlmock doesn't directly support making rows.Scan() fail easily for type mismatches.
-	// Instead, we'll check the row.Err() path by making a row return an error.
-	// A more direct way to test scan error is to provide a value of incompatible type.
-	// For example, providing a string where an int is expected for 'id'.
-
+	// Simulate a row that causes a scan error by providing incompatible data type
 	rows := sqlmock.NewRows([]string{"id", "name", "description"}).
-		AddRow(1, "comp.lang.go", "Go Programming Language").
-		RowError(1, sqlmock.ErrCancelled) // Cause an error on the second "row" during iteration
+		AddRow(1, "comp.lang.go", "Go Programming Language"). // First row is fine
+		AddRow("not-an-int", "another.group", "Another description") // Second row will cause Scan to fail
 
 	mock.ExpectQuery(regexp.QuoteMeta(query)).WillReturnRows(rows)
 
 	_, err = db.GetAllNewsgroups()
 
 	if err == nil {
-		t.Errorf("Expected an error from GetAllNewsgroups due to row iteration error, but got nil")
+		t.Errorf("Expected an error from GetAllNewsgroups due to Scan failure, but got nil")
 	}
 
 	// Check if all expectations were met
@@ -431,13 +435,13 @@ func TestNew(t *testing.T) {
 	// This test requires a running MySQL instance or more complex mocking.
 	// For now, we'll skip if no real DB config is provided or use sqlmock for a basic ping.
 
-	cfg := &config.Config{
-		DBHost: "localhost", // Or a mock server
-		DBPort: 3306,
-		DBUser: "testuser",
-		DBPass: "testpass",
-		DBName: "testdb",
-	}
+	// cfg := &config.Config{ // This variable was unused as the test is skipped.
+	// 	DBHost: "localhost",
+	// 	DBPort: 3306,
+	// 	DBUser: "testuser",
+	// 	DBPass: "testpass",
+	// 	DBName: "testdb",
+	// }
 
 	// To truly test New, you'd point it to a test DB.
 	// Here's how you might use sqlmock for the Ping part:

@@ -12,11 +12,14 @@ import (
 
 	"nntp-web/internal/config"
 	"nntp-web/internal/database"
-	"nntp-web/internal/models"
-	"nntp-web/web/templates" // For template name constants
+	"database/sql" // For sql.ErrNoRows
+	// "nntp-web/internal/models" // Was unused
+	"nntp-web/internal/nntpclient" // For nntpclient.NewClient
+	"nntp-web/web/templates"       // For template name constants
+	htmltemplate "html/template"   // Use standard html/template for parsing
+	"time"                         // For time.Date, time.Now
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/google/safehtml/template"
 )
 
 // newTestServer creates a server instance for testing,
@@ -24,8 +27,8 @@ import (
 func newTestServer(t *testing.T, mockDb *database.DB) *Server {
 	t.Helper()
 
-	// Parse templates like in the actual server setup
-	parsedTemplates, err := template.New("").ParseFS(templates.Get(), "*.html.tmpl")
+	// Parse templates like in the actual server setup, using html/template
+	parsedTemplates, err := htmltemplate.New("test").ParseFS(templates.Files, "*.html.tmpl")
 	if err != nil {
 		t.Fatalf("Failed to parse templates: %v", err)
 	}
@@ -35,8 +38,8 @@ func newTestServer(t *testing.T, mockDb *database.DB) *Server {
 	return &Server{
 		config:    cfg,
 		db:        mockDb,
-		router:    http.NewServeMux(), // Router not strictly needed for direct handler tests if not using its features
-		templates: parsedTemplates,
+		router:    http.NewServeMux(),
+		templates: parsedTemplates, // Now *htmltemplate.Template
 	}
 }
 
@@ -106,7 +109,7 @@ func TestServer_handleShowArticle(t *testing.T) {
 					WillReturnRows(sqlmock.NewRows(articleWithGroupCols)) // No other thread messages
 			},
 			expectedStatusCode: http.StatusOK,
-			expectedBodyContains: []string{"Test Subject", "From: Test From", "Message-ID: <code>&lt;article123@example.com&gt;</code>", "No other messages found in this thread."},
+			expectedBodyContains: []string{"Test Subject", "<strong>From:</strong> Test From", "<strong>Message-ID:</strong> <code>&lt;article123@example.com&gt;</code>", "No other messages found in this thread."},
 		},
 		{
 			name: "canonical path - date mismatch redirect",
@@ -146,7 +149,7 @@ func TestServer_handleShowArticle(t *testing.T) {
 		// --- Message-ID Lookup Tests ---
 		{
 			name: "msgid lookup - success and redirect",
-			path: fmt.Sprintf("/group/%s/?;.msgid=%s", groupName, msgID),
+			path: fmt.Sprintf("/group/%s/;.msgid=%s", groupName, msgID), // Path parameter
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(articleByMsgIDQuery).WithArgs(msgID).
 					WillReturnRows(sqlmock.NewRows(articleWithGroupCols).
@@ -157,7 +160,7 @@ func TestServer_handleShowArticle(t *testing.T) {
 		},
 		{
 			name: "msgid lookup - not found",
-			path: fmt.Sprintf("/group/%s/?;.msgid=notfound@id.com", groupName),
+			path: fmt.Sprintf("/group/%s/;.msgid=notfound@id.com", groupName), // Path parameter
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(articleByMsgIDQuery).WithArgs("notfound@id.com").WillReturnError(sql.ErrNoRows)
 			},
@@ -166,12 +169,15 @@ func TestServer_handleShowArticle(t *testing.T) {
 		},
 		{
 			name: "msgid lookup - invalid path structure",
-			path: fmt.Sprintf("/group/%s/subpath/?;.msgid=%s", groupName, msgID), // Path too long for msgid lookup
+			// Path is /group/groupname/subpath/;.msgid=... which is not a valid structure for msgid lookup.
+			// routeGroupRequests will not match this for handleShowArticle's msgid pattern.
+			// It will fall through to the final http.NotFound in routeGroupRequests.
+			path: fmt.Sprintf("/group/%s/subpath/;.msgid=%s", groupName, msgID),
 			setupMock: func(mock sqlmock.Sqlmock) {
 				// No DB calls expected
 			},
-			expectedStatusCode: http.StatusBadRequest,
-			expectedBodyContains: []string{"Invalid request for Message-ID lookup"},
+			expectedStatusCode: http.StatusNotFound, // Router will 404 this, not handleShowArticle
+			expectedBodyContains: []string{"404 page not found"},
 		},
 		// --- Thread Display Test ---
 		{
@@ -233,6 +239,7 @@ func TestServer_handleShowArticle(t *testing.T) {
 			body := rr.Body.String()
 			for _, substr := range tt.expectedBodyContains {
 				if !strings.Contains(body, substr) {
+					t.Logf("For path '%s', comparing body substring: [[%s]] against full body: [[%s]]", tt.path, substr, body) // Added log
 					t.Errorf("response body for path '%s' does not contain expected substring '%s'. Body:\n%s", tt.path, substr, body)
 				}
 			}
