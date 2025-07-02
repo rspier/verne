@@ -20,7 +20,7 @@ import (
 	"github.com/cespare/xxhash/v2" // For XXH64 checksum
 	"github.com/makiuchi-d/gozxing"
 	"github.com/makiuchi-d/gozxing/qrcode"
-	"github.com/klauspost/compress/zstd" // For Zstandard decompression
+	"compress/gzip" // For Gzip decompression
 )
 
 // ChunkHeader defines the metadata prepended to each data chunk.
@@ -368,21 +368,21 @@ func main() {
 		}
 	}
 
-	// At this point, finalDataBuffer contains the reassembled ZSTD-compressed data.
+	// At this point, finalDataBuffer contains the reassembled Gzipped data.
 	// Decompress it.
-	fmt.Printf("Reassembled %d bytes of compressed data. Decompressing with zstd...\n", finalDataBuffer.Len())
-	zstdDecoder, err := zstd.NewReader(nil)
+	fmt.Printf("Reassembled %d bytes of gzipped data. Decompressing with gzip...\n", finalDataBuffer.Len())
+
+	gzipReader, err := gzip.NewReader(bytes.NewReader(finalDataBuffer.Bytes()))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating zstd reader: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error creating gzip reader: %v\n", err)
 		os.Exit(1)
 	}
-	defer zstdDecoder.Close()
+	defer gzipReader.Close()
 
-	decompressedData, err := zstdDecoder.DecodeAll(finalDataBuffer.Bytes(), nil)
+	decompressedData, err := io.ReadAll(gzipReader) // Requires Go 1.16+
+	// If using older Go, use: decompressedData, err := ioutil.ReadAll(gzipReader) and import "io/ioutil"
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error decompressing data: %v\n", err)
-		// Optionally, write the compressed data for debugging if decompression fails?
-		// For now, just exit.
+		fmt.Fprintf(os.Stderr, "Error decompressing data with gzip: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Printf("Decompressed data size: %d bytes.\n", len(decompressedData))
@@ -394,7 +394,7 @@ func main() {
 	}
 
 	if missingSequences {
-		fmt.Printf("Wrote %d bytes of decompressed data to %s, BUT THE ORIGINAL COMPRESSED STREAM WAS INCOMPLETE due to missing sequence numbers.\n", len(decompressedData), outputFile)
+		fmt.Printf("Wrote %d bytes of decompressed data to %s, BUT THE ORIGINAL GZIPPED STREAM WAS INCOMPLETE due to missing sequence numbers.\n", len(decompressedData), outputFile)
 	} else {
 		fmt.Printf("Successfully wrote %d bytes of decompressed data to %s\n", len(decompressedData), outputFile)
 	}

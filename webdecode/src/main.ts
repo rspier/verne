@@ -2,21 +2,13 @@
 declare var jsQR: any; // jsQR library
 declare var xxhash: any; // xxhash-wasm library
 // No longer declaring external ASCII85 library, will use native implementation.
-// Assuming zstd-codec is loaded globally from jsDelivr CDN
-interface ZstdSimpleApi {
-    compress: (data: Uint8Array, level?: number) => Uint8Array;
-    decompress: (data: Uint8Array) => Uint8Array;
-}
-interface ZstdApi {
-    Simple: new () => ZstdSimpleApi;
-    // Streaming, Dict APIs can be added if needed
-}
-// Using 'any' for ZstdCodec for now to probe its structure at runtime, as v0.1.5 UMD might differ.
-declare var ZstdCodec: any;
+// No specific ZSTD library declaration needed for native DecompressionStream.
+// However, DecompressionStream itself needs to be declared if target < ES2022 or not in default lib.
+// For now, assume it's available in modern browser contexts targeted by tsconfig.json.
 
 // --- Global instances for initialized libraries ---
 let h64: any = null; // For xxhash
-let zstdSimple: ZstdSimpleApi | null = null; // For ZstdCodec.Simple API
+// let zstdSimple: ZstdSimpleApi | null = null; // No longer needed
 
 // --- DOM Element References ---
 const videoElement = document.getElementById('video') as HTMLVideoElement | null;
@@ -233,67 +225,6 @@ async function initXxhash() {
     }
 }
 
-/**
- * Initializes the ZstdCodec WASM module.
- */
-function initZstdCodec(): Promise<void> {
-    return new Promise((resolve, reject) => {
-        if (zstdSimple) { // Already initialized
-            resolve();
-            return;
-        }
-        updateStatus("Attempting to initialize ZSTD Codec...");
-
-        if (typeof ZstdCodec === 'undefined') {
-            const errMsg = "ZstdCodec global object not found. Ensure zstd-codec.js from CDN is loaded correctly.";
-            console.error("[initZstdCodec]", errMsg);
-            updateStatus(errMsg, true);
-            reject(new Error(errMsg));
-            return;
-        }
-
-        try {
-            // Try direct instantiation (common for UMD builds of Emscripten modules if .run isn't used,
-            // or if the global ZstdCodec IS the 'zstd' api object itself)
-            if (typeof ZstdCodec.Simple === 'function') {
-                zstdSimple = new ZstdCodec.Simple();
-                updateStatus("ZSTD Codec (Simple API) initialized directly from ZstdCodec.Simple.");
-                console.log("[initZstdCodec] zstdSimple instance created directly from ZstdCodec.Simple:", zstdSimple);
-                resolve();
-            }
-            // Fallback to .run method if Simple isn't direct (newer/documented API style)
-            else if (typeof ZstdCodec.run === 'function') {
-                updateStatus("Initializing ZSTD Codec via ZstdCodec.run()...");
-                ZstdCodec.run((zstd: ZstdApi) => { // zstd here is the API object passed by the callback
-                    console.log("[initZstdCodec] Inside ZstdCodec.run callback. 'zstd' api object:", zstd);
-                    if (!zstd || typeof zstd.Simple !== 'function') { // Check zstd.Simple here
-                        const errMsg = "ZSTD API (zstd.Simple) not available after ZstdCodec.run().";
-                        console.error("[initZstdCodec]", errMsg, "zstd api object:", zstd);
-                        updateStatus(errMsg, true);
-                        reject(new Error(errMsg));
-                        return;
-                    }
-                    zstdSimple = new zstd.Simple(); // Use the 'zstd' from callback
-                    updateStatus("ZSTD Codec initialized successfully via .run().");
-                    console.log("[initZstdCodec] zstdSimple instance created via ZstdCodec.run callback:", zstdSimple);
-                    resolve();
-                });
-            } else {
-                const errMsg = "ZstdCodec is defined, but neither a direct .Simple constructor nor a .run method was found. Incompatible/Unknown API structure.";
-                console.error("[initZstdCodec]", errMsg, "ZstdCodec object:", ZstdCodec);
-                updateStatus(errMsg, true);
-                reject(new Error(errMsg));
-            }
-        } catch (err: any) {
-            const errMsg = `Error initializing ZSTD Codec: ${err.message || err}`;
-            console.error("[initZstdCodec]", errMsg, err);
-            updateStatus(errMsg, true);
-            reject(new Error(errMsg));
-        }
-    });
-}
-
-
 // --- Main Application Logic (to be filled in: startCapture, stopCapture, processFrame, assembleData) ---
 
 // Ensure all essential DOM elements are found
@@ -306,15 +237,15 @@ if (!videoElement || !canvasElement || !startBtn || !stopBtn || !statusOutput ||
     stopBtn.disabled = true;
     downloadLink.style.display = 'none';
 
-    // Initialize necessary libraries
-    Promise.all([initXxhash(), initZstdCodec()])
+    // Initialize necessary libraries (xxhash only for now, Gzip is native)
+    initXxhash()
         .then(() => {
             updateStatus("Application ready. You can start screen capture.");
             if (startBtn) startBtn.disabled = false;
         })
         .catch(error => {
-            updateStatus(`Initialization failed: ${error.message || error}`, true);
-            if (startBtn) startBtn.disabled = true; // Keep disabled if any critical init fails
+            updateStatus(`XXHash Initialization failed: ${error.message || error}`, true);
+            if (startBtn) startBtn.disabled = true;
         });
 
     startBtn.addEventListener('click', startCapture);
@@ -569,9 +500,38 @@ function processFrame() {
     }
 }
 
+async function decompressGzipStream(compressedData: Uint8Array): Promise<Uint8Array> {
+    if (typeof DecompressionStream === 'undefined') {
+        console.error("DecompressionStream API not available in this browser.");
+        throw new Error("DecompressionStream API not available.");
+    }
+    const ds = new DecompressionStream('gzip');
+    const writer = ds.writable.getWriter();
+    writer.write(compressedData);
+    writer.close();
 
-function assembleData() {
-    console.log("[assembleData] Called. Current zstdSimple state:", zstdSimple);
+    const chunks: Uint8Array[] = [];
+    let totalSize = 0;
+    const reader = ds.readable.getReader();
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        totalSize += value.length;
+    }
+
+    const decompressed = new Uint8Array(totalSize);
+    let offset = 0;
+    for (const chunk of chunks) {
+        decompressed.set(chunk, offset);
+        offset += chunk.length;
+    }
+    return decompressed;
+}
+
+
+async function assembleData() { // Made async
+    console.log("[assembleData] Called."); // Removed zstdSimple state log
     if (!outputTextarea || !downloadLink || !fileNameInput || !progressOverview) {
         updateStatus("Cannot assemble data: critical HTML elements missing.", true);
         return;
@@ -653,20 +613,16 @@ function assembleData() {
         currentOffset += chunk.length;
     }
 
-    updateStatus(`Compressed data reassembled. Total compressed size: ${reassembledCompressedData.length} bytes. Decompressing...`);
+    updateStatus(`Gzipped data reassembled. Total gzipped size: ${reassembledCompressedData.length} bytes. Decompressing...`);
 
     let finalDecompressedData: Uint8Array;
     try {
-        // Use the initialized zstdSimple from ZstdCodec
-        if (!zstdSimple) {
-            throw new Error("ZSTD Codec (zstdSimple API) not initialized. Cannot decompress.");
-        }
-        finalDecompressedData = zstdSimple.decompress(reassembledCompressedData);
-        updateStatus(`Data decompressed successfully using ZstdCodec. Original size: ${finalDecompressedData.length} bytes.`);
+        finalDecompressedData = await decompressGzipStream(reassembledCompressedData);
+        updateStatus(`Data decompressed successfully using Gzip. Original size: ${finalDecompressedData.length} bytes.`);
     } catch (err: any) {
-        updateStatus(`Error during ZSTD decompression with ZstdCodec: ${err.message || err}. Displaying raw compressed data instead.`, true);
+        updateStatus(`Error during Gzip decompression: ${err.message || err}. Displaying raw gzipped data instead.`, true);
         finalDecompressedData = reassembledCompressedData;
-        outputTextarea.value = "<Error during ZSTD decompression (ZstdCodec). Raw (compressed) data might be available for download.>";
+        outputTextarea.value = "<Error during Gzip decompression. Raw (gzipped) data might be available for download.>";
     }
 
 

@@ -19,8 +19,8 @@ import (
 	"math/rand"
 	"time"
 	"math" // For math.MaxUint16
+	"compress/gzip" // For Gzip compression
 
-	"github.com/klauspost/compress/zstd" // For Zstandard compression
 	"github.com/boombuler/barcode"
 	"github.com/boombuler/barcode/qr"
 	"github.com/cespare/xxhash/v2" // For XXH64 checksum
@@ -304,17 +304,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Compress the data using Zstandard
-	fmt.Printf("Read %d bytes from %s. Compressing with zstd...\n", len(data), inputFile)
-	zstdEncoder, errEnc := zstd.NewWriter(nil)
-	if errEnc != nil {
-		fmt.Fprintf(os.Stderr, "Error creating zstd writer: %v\n", errEnc)
+	// Compress the data using Gzip
+	fmt.Printf("Read %d bytes from %s. Compressing with gzip...\n", len(data), inputFile)
+	var gzipBuffer bytes.Buffer
+	gzipWriter := gzip.NewWriter(&gzipBuffer)
+	_, err = gzipWriter.Write(data)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing data to gzip writer: %v\n", err)
 		os.Exit(1)
 	}
-	compressedData := zstdEncoder.EncodeAll(data, make([]byte, 0, len(data)/2)) // Pre-allocate roughly half size
-	zstdEncoder.Close() // Important to close to flush any buffered data, though EncodeAll usually does this.
+	err = gzipWriter.Close() // Essential to flush all data to the buffer
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error closing gzip writer: %v\n", err)
+		os.Exit(1)
+	}
+	compressedData := gzipBuffer.Bytes()
 
-	fmt.Printf("Compressed data size: %d bytes (Original: %d bytes).\n", len(compressedData), len(data))
+	fmt.Printf("Gzip compressed data size: %d bytes (Original: %d bytes).\n", len(compressedData), len(data))
 
 	// Chunk data (now chunking the compressedData)
 	var chunks [][]byte
@@ -326,7 +332,7 @@ func main() {
 		chunks = append(chunks, compressedData[i:end])
 	}
 
-	fmt.Printf("Split compressed data into %d chunks.\n", len(chunks))
+	fmt.Printf("Split gzipped data into %d chunks.\n", len(chunks))
 
 	if len(chunks) == 0 {
 		fmt.Println("No data to encode. Exiting.")
