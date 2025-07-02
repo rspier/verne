@@ -89,10 +89,9 @@ function decodeAdobeAscii85(a85: string): Uint8Array {
         if (numBytesToOutput > 2) decodedBytes.push((val >> 8) & 0xFF);
         if (numBytesToOutput > 3) decodedBytes.push(val & 0xFF);
 
-        // If padded, trim the output array to the correct number of bytes for this block
-        if (charsInBlock < 5) {
-            decodedBytes = decodedBytes.slice(0, decodedBytes.length - (4 - numBytesToOutput));
-        }
+        // The conditional push logic above already ensures the correct number of bytes (numBytesToOutput)
+        // are added for the current block, including handling for the last padded block.
+        // No further slicing per block is needed here.
     }
     return new Uint8Array(decodedBytes);
 }
