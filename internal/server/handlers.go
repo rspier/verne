@@ -67,11 +67,32 @@ func (s *Server) handleListMessages() http.HandlerFunc {
 				return
 			}
 			specificMonthRequested = true
-		} else if len(pathParts) == 2 {
-			// Path: /group/{groupname}/ -> current month
-			now := time.Now()
-			targetYear, targetMonth = now.Year(), int(now.Month())
-			specificMonthRequested = false // Using current month
+		} else if len(pathParts) == 2 { // Path: /group/{groupname}/
+			// Default to the latest month with messages for this group
+			_, _, maxY, maxM, found, errDb := s.db.GetMinMaxMessageMonthsForGroup(groupNameStr)
+			if errDb != nil {
+				if strings.Contains(errDb.Error(), "not found") { // Group itself not found
+					log.Printf("Group not found for default month: %s. Error: %v", groupNameStr, errDb)
+					http.Error(w, fmt.Sprintf("Group %s not found.", groupNameStr), http.StatusNotFound)
+				} else {
+					log.Printf("Error getting min/max months for group %s: %v", groupNameStr, errDb)
+					http.Error(w, "Failed to determine latest month for group.", http.StatusInternalServerError)
+				}
+				return
+			}
+			if !found { // Group exists but has no messages
+				// Keep targetYear/Month as 0 or a signal that there are no messages.
+				// The template will handle "no messages". We still need to calculate nav links if possible (e.g. if group was just created).
+				// For now, if no messages, try current calendar month to show "no messages in this month".
+				now := time.Now()
+				targetYear, targetMonth = now.Year(), int(now.Month())
+				log.Printf("Group %s has no messages. Defaulting to current calendar month %d-%d", groupNameStr, targetYear, targetMonth)
+
+			} else {
+				targetYear, targetMonth = maxY, maxM
+				log.Printf("Defaulting group %s to latest month with messages: %d-%d", groupNameStr, targetYear, targetMonth)
+			}
+			specificMonthRequested = false
 		} else {
 			http.NotFound(w, r)
 			return
@@ -89,22 +110,46 @@ func (s *Server) handleListMessages() http.HandlerFunc {
 			return
 		}
 
-		// Calculate previous and next months for navigation
-		currentDate := time.Date(targetYear, time.Month(targetMonth), 1, 0, 0, 0, 0, time.UTC)
-		prevDate := currentDate.AddDate(0, -1, 0)
-		nextDate := currentDate.AddDate(0, 1, 0)
-
+		// Data for template
 		data := map[string]interface{}{
 			"GroupName":              groupNameStr,
 			"Articles":               articles,
 			"CurrentYear":            targetYear,
 			"CurrentMonth":           targetMonth,
-			"PrevYear":               prevDate.Year(),
-			"PrevMonth":              int(prevDate.Month()),
-			"NextYear":               nextDate.Year(),
-			"NextMonth":              int(nextDate.Month()),
-			"SpecificMonthRequested": specificMonthRequested, // To adjust breadcrumbs or titles if needed
+			"SpecificMonthRequested": specificMonthRequested,
+			"PrevMonthFound":         false, // Initialize
+			"NextMonthFound":         false, // Initialize
 		}
+
+		// Smarter Previous Month Navigation
+		prevY, prevM, prevFound, errPrev := s.db.GetPrevMonthWithMessages(groupNameStr, targetYear, targetMonth)
+		if errPrev != nil {
+			log.Printf("Error getting previous month for %s (%d-%d): %v", groupNameStr, targetYear, targetMonth, errPrev)
+			// Non-fatal, just won't show prev link
+		}
+		if prevFound {
+			data["PrevMonthFound"] = true
+			data["PrevYear"] = prevY
+			data["PrevMonth"] = prevM
+		}
+
+		// Smarter Next Month Navigation
+		nextY, nextM, nextFound, errNext := s.db.GetNextMonthWithMessages(groupNameStr, targetYear, targetMonth)
+		if errNext != nil {
+			log.Printf("Error getting next month for %s (%d-%d): %v", groupNameStr, targetYear, targetMonth, errNext)
+			// Non-fatal, just won't show next link
+		}
+		if nextFound {
+			// Also ensure next month is not in the "future" beyond current calendar month if not specifically requested
+			// However, GetNextMonthWithMessages should already cap at max month with messages.
+			// For display, we might want to prevent showing a next link that goes beyond the current actual date
+			// unless a specific future month (with posts) was requested.
+			// For now, trust GetNextMonthWithMessages.
+			data["NextMonthFound"] = true
+			data["NextYear"] = nextY
+			data["NextMonth"] = nextM
+		}
+
 		s.renderTemplate(w, r, templates.MessageList, data)
 	}
 }

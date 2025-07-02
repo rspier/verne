@@ -137,6 +137,118 @@ func (db *DB) GetMessagesForGroupMonth(groupName string, year int, month int) ([
 	return articles, nil
 }
 
+// GetMinMaxMessageMonthsForGroup finds the earliest and latest month/year with messages for a group.
+// Returns found=false if the group has no messages or does not exist.
+func (db *DB) GetMinMaxMessageMonthsForGroup(groupName string) (minYear, minMonth, maxYear, maxMonth int, found bool, err error) {
+	var groupID uint16
+	groupQuery := "SELECT id FROM `groups` WHERE name = ?"
+	err = db.sqlDB.QueryRow(groupQuery, groupName).Scan(&groupID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return 0, 0, 0, 0, false, fmt.Errorf("group '%s' not found: %w", groupName, err)
+		}
+		return 0, 0, 0, 0, false, fmt.Errorf("failed to query group ID for '%s': %w", groupName, err)
+	}
+
+	// query := ` // This query was unused after switching to MIN(received), MAX(received)
+	// 	SELECT
+	// 		MIN(YEAR(received)), MIN(MONTH(received)),
+	// 		MAX(YEAR(received)), MAX(MONTH(received))
+	// 	FROM articles
+	// 	WHERE group_id = ?`
+
+	// Need to handle NULL if no rows, sql.NullInt32 or similar, or check count first.
+	// Simpler: check if any messages exist for the group first.
+	var count int
+	countQuery := "SELECT COUNT(*) FROM articles WHERE group_id = ?"
+	err = db.sqlDB.QueryRow(countQuery, groupID).Scan(&count)
+	if err != nil {
+		return 0,0,0,0, false, fmt.Errorf("failed to count messages for group %d: %w", groupID, err)
+	}
+	if count == 0 {
+		return 0,0,0,0, false, nil // No messages in group, found = false
+	}
+
+	// Since MySQL MIN/MAX on date parts won't give the correct month for MIN(YEAR(received)) if it's not Jan.
+	// It's better to get MIN(received) and MAX(received) directly.
+	var minDate, maxDate time.Time
+	dateQuery := "SELECT MIN(received), MAX(received) FROM articles WHERE group_id = ?"
+	err = db.sqlDB.QueryRow(dateQuery, groupID).Scan(&minDate, &maxDate)
+	if err != nil {
+		// This should not happen if count > 0, but handle defensively.
+		return 0,0,0,0, false, fmt.Errorf("failed to get min/max dates for group %d: %w", groupID, err)
+	}
+
+	return minDate.Year(), int(minDate.Month()), maxDate.Year(), int(maxDate.Month()), true, nil
+}
+
+
+// GetPrevMonthWithMessages finds the nearest previous month with messages for the group.
+func (db *DB) GetPrevMonthWithMessages(groupName string, currentYear, currentMonth int) (prevYear, prevMonth int, found bool, err error) {
+	var groupID uint16
+	groupQuery := "SELECT id FROM `groups` WHERE name = ?"
+	err = db.sqlDB.QueryRow(groupQuery, groupName).Scan(&groupID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return 0, 0, false, fmt.Errorf("group '%s' not found: %w", groupName, err)
+		}
+		return 0, 0, false, fmt.Errorf("failed to query group ID for '%s': %w", groupName, err)
+	}
+
+	// Target date represents the first day of the current month
+	targetDate := time.Date(currentYear, time.Month(currentMonth), 1, 0, 0, 0, 0, time.UTC)
+
+	query := `
+		SELECT YEAR(received), MONTH(received)
+		FROM articles
+		WHERE group_id = ? AND received < ?
+		ORDER BY received DESC
+		LIMIT 1`
+
+	var pYear, pMonth int
+	err = db.sqlDB.QueryRow(query, groupID, targetDate).Scan(&pYear, &pMonth)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return 0, 0, false, nil // No previous month with messages
+		}
+		return 0, 0, false, fmt.Errorf("failed to find previous month for group %d: %w", groupID, err)
+	}
+	return pYear, pMonth, true, nil
+}
+
+// GetNextMonthWithMessages finds the nearest next month with messages for the group.
+func (db *DB) GetNextMonthWithMessages(groupName string, currentYear, currentMonth int) (nextYear, nextMonth int, found bool, err error) {
+	var groupID uint16
+	groupQuery := "SELECT id FROM `groups` WHERE name = ?"
+	err = db.sqlDB.QueryRow(groupQuery, groupName).Scan(&groupID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return 0, 0, false, fmt.Errorf("group '%s' not found: %w", groupName, err)
+		}
+		return 0, 0, false, fmt.Errorf("failed to query group ID for '%s': %w", groupName, err)
+	}
+
+	// Target date represents the first day of the *next* month relative to current view
+	targetDate := time.Date(currentYear, time.Month(currentMonth), 1, 0, 0, 0, 0, time.UTC).AddDate(0, 1, 0)
+
+	query := `
+		SELECT YEAR(received), MONTH(received)
+		FROM articles
+		WHERE group_id = ? AND received >= ?
+		ORDER BY received ASC
+		LIMIT 1`
+
+	var nYear, nMonth int
+	err = db.sqlDB.QueryRow(query, groupID, targetDate).Scan(&nYear, &nMonth)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return 0, 0, false, nil // No next month with messages
+		}
+		return 0, 0, false, fmt.Errorf("failed to find next month for group %d: %w", groupID, err)
+	}
+	return nYear, nMonth, true, nil
+}
+
 // GetArticleByDetails retrieves a specific article by its group name, year, month, and article number (articles.id).
 // It also populates the Article.GroupName field.
 func (db *DB) GetArticleByDetails(groupName string, year int, month int, articleNum uint32) (*models.Article, error) {

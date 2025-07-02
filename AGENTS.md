@@ -28,6 +28,11 @@ When working on this Go project, please adhere to the following guidelines:
 
 7.  **Security**:
     *   Be mindful of security implications in all aspects of development (XSS, SQLi, CSRF, etc.).
-    *   The use of `safehtml` is a key part of XSS prevention.
+    *   The use of `safehtml` (or `html/template`'s default auto-escaping) is a key part of XSS prevention.
+
+8.  **Pre-Submission Checks**:
+    *   All tests (`go test ./...`) must pass.
+    *   The project must build successfully (`go build ./...`).
+    *   Never commit compiled binaries (e.g., executables, `.o` files) into the version control system. Ensure your `.gitignore` is configured appropriately.
 
 These guidelines may be updated as the project evolves.

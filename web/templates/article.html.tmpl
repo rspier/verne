@@ -46,8 +46,7 @@
                     <li><strong>From:</strong> {{.Article.From}}</li>
                     <li><strong>Date:</strong> {{.Article.Date}}</li>
                     <li><strong>Message-ID:</strong> <code>&lt;{{.Article.MessageID}}&gt;</code></li>
-                    <li><strong>Lines:</strong> {{.Article.Lines}}</li>
-                    <li><strong>Bytes:</strong> {{.Article.Bytes}}</li>
+                    <!-- Lines and Bytes removed as per refinement -->
                     <li><strong>Raw Link:</strong>
                         <a href="/group/{{.Article.GroupName}}/{{.Article.Received.Year}}/{{printf "%02d" .Article.Received.Month}}/msg{{.Article.ArticleNum}}.html" rel="canonical">
                             /group/{{.Article.GroupName}}/{{.Article.Received.Year}}/{{printf "%02d" .Article.Received.Month}}/msg{{.Article.ArticleNum}}.html

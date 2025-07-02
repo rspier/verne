@@ -22,6 +22,10 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
+var articleColsNoGroup = []string{"group_id", "id", "h_messageid", "h_subject", "h_from", "h_date", "received", "thread_id", "parent", "h_references", "h_lines", "h_bytes"}
+var articleColsWithGroup = append(articleColsNoGroup, "group_name")
+
+
 // newTestServer creates a server instance for testing,
 // allowing injection of a mock DB.
 func newTestServer(t *testing.T, mockDb *database.DB) *Server {
@@ -263,14 +267,29 @@ func TestServer_RouteGroupRequests(t *testing.T) {
 	expectedListGroupsSQLQuery := "SELECT id, name, description FROM `groups` ORDER BY name"
 
 	// Define queries for GetMessagesForGroupMonth as it might be called by the router
-	groupQueryBase := "SELECT id FROM `groups` WHERE name = ?"
-	articleQueryBase := `
+	groupQueryBase := regexp.QuoteMeta("SELECT id FROM `groups` WHERE name = ?")
+	articleQueryBase := regexp.QuoteMeta(`
 		SELECT group_id, id, h_messageid, h_subject, h_from, h_date,
 		       received, thread_id, parent, h_references, h_lines, h_bytes
 		FROM articles
 		WHERE group_id = ? AND YEAR(received) = ? AND MONTH(received) = ?
-		ORDER BY received DESC, id DESC`
-
+		ORDER BY received DESC, id DESC`)
+	// Query for GetMinMaxMessageMonthsForGroup
+	countQuery := regexp.QuoteMeta("SELECT COUNT(*) FROM articles WHERE group_id = ?")
+	// minMaxMonthQuery is not used by subtests in TestServer_RouteGroupRequests directly
+	// Queries for GetPrevMonthWithMessages / GetNextMonthWithMessages
+	prevMonthNavQuery := regexp.QuoteMeta(`
+		SELECT YEAR(received), MONTH(received)
+		FROM articles
+		WHERE group_id = ? AND received < ?
+		ORDER BY received DESC
+		LIMIT 1`)
+	nextMonthNavQuery := regexp.QuoteMeta(`
+		SELECT YEAR(received), MONTH(received)
+		FROM articles
+		WHERE group_id = ? AND received >= ?
+		ORDER BY received ASC
+		LIMIT 1`)
 
 	tests := []struct {
 		name               string
@@ -287,7 +306,7 @@ func TestServer_RouteGroupRequests(t *testing.T) {
 				rows := sqlmock.NewRows([]string{"id", "name", "description"}).
 					AddRow(1, "alt.test", "Test group").
 					AddRow(2, "comp.lang.go", "Go Language")
-				mock.ExpectQuery(regexp.QuoteMeta(expectedListGroupsSQLQuery)).WillReturnRows(rows)
+				mock.ExpectQuery(expectedListGroupsSQLQuery).WillReturnRows(rows)
 			},
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       []string{"alt.test", "Go Language", `<a href="/group/alt.test/">`},
@@ -296,20 +315,37 @@ func TestServer_RouteGroupRequests(t *testing.T) {
 			name: "dispatch to list groups - database error",
 			path: "/group/",
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(regexp.QuoteMeta(expectedListGroupsSQLQuery)).WillReturnError(errors.New("db error for list groups"))
+				mock.ExpectQuery(expectedListGroupsSQLQuery).WillReturnError(errors.New("db error for list groups"))
 			},
 			expectedStatusCode: http.StatusInternalServerError,
 			expectedBody:       []string{"Failed to retrieve newsgroups"},
 		},
 		{
-			name: "dispatch to list messages (current month) - group found, no messages",
-			path: "/group/comp.test/", // Trailing slash indicates current month for this group
+			name: "dispatch to list messages (default to current cal month) - group found, no messages",
+			path: "/group/comp.test/",
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(regexp.QuoteMeta(groupQueryBase)).WithArgs("comp.test").
-					WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1)) // group_id = 1
-				mock.ExpectQuery(regexp.QuoteMeta(articleQueryBase)).
-					WithArgs(1, time.Now().Year(), int(time.Now().Month())).
-					WillReturnRows(sqlmock.NewRows([]string{"group_id", "id", "h_messageid", "h_subject", "h_from", "h_date", "received", "thread_id", "parent", "h_references", "h_lines", "h_bytes"}))
+				groupID := 1
+				now := time.Now()
+				currentY, currentM := now.Year(), int(now.Month())
+
+				// 1. GetMinMaxMessageMonthsForGroup
+				mock.ExpectQuery(groupQueryBase).WithArgs("comp.test").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID))
+				mock.ExpectQuery(countQuery).WithArgs(groupID).WillReturnRows(sqlmock.NewRows([]string{"COUNT(*)"}).AddRow(0)) // No messages
+
+				// 2. GetMessagesForGroupMonth (for currentY, currentM because count was 0)
+				mock.ExpectQuery(groupQueryBase).WithArgs("comp.test").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID))
+				mock.ExpectQuery(articleQueryBase).WithArgs(groupID, currentY, currentM).
+					WillReturnRows(sqlmock.NewRows(articleColsNoGroup))
+
+				// 3. GetPrevMonthWithMessages
+				mock.ExpectQuery(groupQueryBase).WithArgs("comp.test").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID))
+				prevNavTargetDate := time.Date(currentY, time.Month(currentM), 1, 0,0,0,0,time.UTC)
+				mock.ExpectQuery(prevMonthNavQuery).WithArgs(groupID, prevNavTargetDate).WillReturnError(sql.ErrNoRows)
+
+				// 4. GetNextMonthWithMessages
+				mock.ExpectQuery(groupQueryBase).WithArgs("comp.test").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID))
+				nextNavTargetDate := time.Date(currentY, time.Month(currentM), 1, 0,0,0,0,time.UTC).AddDate(0,1,0)
+				mock.ExpectQuery(nextMonthNavQuery).WithArgs(groupID, nextNavTargetDate).WillReturnError(sql.ErrNoRows)
 			},
 			expectedStatusCode: http.StatusOK,
 			expectedBody:       []string{"Messages for", "comp.test", "No messages found for this month."},
@@ -318,8 +354,8 @@ func TestServer_RouteGroupRequests(t *testing.T) {
 			name: "dispatch to list messages - group not found",
 			path: "/group/unknown.group/",
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(regexp.QuoteMeta(groupQueryBase)).WithArgs("unknown.group").
-					WillReturnError(sql.ErrNoRows)
+				// GetMinMaxMessageMonthsForGroup fails to find group
+				mock.ExpectQuery(groupQueryBase).WithArgs("unknown.group").WillReturnError(sql.ErrNoRows)
 			},
 			expectedStatusCode: http.StatusNotFound,
 			expectedBody:       []string{"Group unknown.group not found"},
@@ -406,7 +442,20 @@ func TestServer_handleListMessages_SpecificMonth(t *testing.T) {
 		FROM articles
 		WHERE group_id = ? AND YEAR(received) = ? AND MONTH(received) = ?
 		ORDER BY received DESC, id DESC`)
+	prevMonthNavQuery := regexp.QuoteMeta(`
+		SELECT YEAR(received), MONTH(received)
+		FROM articles
+		WHERE group_id = ? AND received < ?
+		ORDER BY received DESC
+		LIMIT 1`)
+	nextMonthNavQuery := regexp.QuoteMeta(`
+		SELECT YEAR(received), MONTH(received)
+		FROM articles
+		WHERE group_id = ? AND received >= ?
+		ORDER BY received ASC
+		LIMIT 1`)
 	sampleReceivedTime := time.Date(targetYear, time.Month(targetMonth), 5, 10, 30, 0, 0, time.UTC)
+
 
 	tests := []struct {
 		name                 string
@@ -414,49 +463,71 @@ func TestServer_handleListMessages_SpecificMonth(t *testing.T) {
 		setupMock            func(mock sqlmock.Sqlmock)
 		expectedStatusCode   int
 		expectedBodyContains []string
-		expectDBError        bool
+		expectDBErrorOnArticleQuery bool // To distinguish from group query error
 	}{
 		{
-			name: "success - messages found for specific month",
-			path: path,
+			name: "success - messages found, prev/next links active",
+			path: path, // /group/comp.sys.mac/2023/11.html
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID))
-				articleRows := sqlmock.NewRows([]string{
-					"group_id", "id", "h_messageid", "h_subject", "h_from", "h_date",
-					"received", "thread_id", "parent", "h_references", "h_lines", "h_bytes",
-				}).AddRow(groupID, 201, "msgABC@example.com", "Old News", "Old Timer", "Yesterday", sampleReceivedTime, 3, 0, "", 30, 300)
-				mock.ExpectQuery(articleQuery).WithArgs(groupID, targetYear, targetMonth).WillReturnRows(articleRows)
+				// 1. Call to s.db.GetMessagesForGroupMonth(groupName, targetYear, targetMonth)
+				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID)) // Internal group ID lookup
+				mock.ExpectQuery(articleQuery).WithArgs(groupID, targetYear, targetMonth).
+					WillReturnRows(sqlmock.NewRows(articleColsNoGroup).AddRow(groupID, 201, "msg@nov", "Nov News", "User", "Date", sampleReceivedTime, 3,0,"",30,300))
+
+				// 2. Call to s.db.GetPrevMonthWithMessages(groupName, targetYear, targetMonth)
+				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID)) // Internal group ID lookup
+				prevNavTargetDate := time.Date(targetYear, time.Month(targetMonth), 1, 0,0,0,0,time.UTC)
+				mock.ExpectQuery(prevMonthNavQuery).WithArgs(groupID, prevNavTargetDate).
+					WillReturnRows(sqlmock.NewRows([]string{"YEAR(received)", "MONTH(received)"}).AddRow(2023, 10))
+
+				// 3. Call to s.db.GetNextMonthWithMessages(groupName, targetYear, targetMonth)
+				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID)) // Internal group ID lookup
+				nextNavTargetDate := time.Date(targetYear, time.Month(targetMonth), 1, 0,0,0,0,time.UTC).AddDate(0,1,0)
+				mock.ExpectQuery(nextMonthNavQuery).WithArgs(groupID, nextNavTargetDate).
+					WillReturnRows(sqlmock.NewRows([]string{"YEAR(received)", "MONTH(received)"}).AddRow(2023, 12))
 			},
 			expectedStatusCode: http.StatusOK,
 			expectedBodyContains: []string{
-				fmt.Sprintf("Messages for %d-%02d", targetYear, targetMonth),
-				"Old News", "Old Timer",
-				fmt.Sprintf("/group/%s/%d/%02d/msg201.html", groupName, targetYear, targetMonth),
-				fmt.Sprintf("/group/%s/%d/%02d.html", groupName, 2023, 10), // Prev month link (Oct)
-				fmt.Sprintf("/group/%s/%d/%02d.html", groupName, 2023, 12), // Next month link (Dec)
+				fmt.Sprintf("Messages for %d-%02d", targetYear, targetMonth), // 2023-11
+				"Nov News",
+				"Previous Month (2023-10)",
+				"Next Month (2023-12)",
 			},
 		},
 		{
-			name: "success - no messages for specific month",
+			name: "success - no messages for specific month, but prev/next still possible",
 			path: path,
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID))
-				emptyArticleRows := sqlmock.NewRows([]string{
-					"group_id", "id", "h_messageid", "h_subject", "h_from", "h_date",
-					"received", "thread_id", "parent", "h_references", "h_lines", "h_bytes",
-				})
-				mock.ExpectQuery(articleQuery).WithArgs(groupID, targetYear, targetMonth).WillReturnRows(emptyArticleRows)
+				// 1. Call to s.db.GetMessagesForGroupMonth -  no articles
+				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID)) // Internal group ID lookup
+				mock.ExpectQuery(articleQuery).WithArgs(groupID, targetYear, targetMonth).
+					WillReturnRows(sqlmock.NewRows(articleColsNoGroup))
+
+				// 2. Call to s.db.GetPrevMonthWithMessages
+				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID)) // Internal group ID lookup
+				prevNavTargetDate := time.Date(targetYear, time.Month(targetMonth), 1, 0,0,0,0,time.UTC)
+				mock.ExpectQuery(prevMonthNavQuery).WithArgs(groupID, prevNavTargetDate).
+					WillReturnRows(sqlmock.NewRows([]string{"YEAR(received)", "MONTH(received)"}).AddRow(2023, 10))
+
+				// 3. Call to s.db.GetNextMonthWithMessages
+				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID)) // Internal group ID lookup
+				nextNavTargetDate := time.Date(targetYear, time.Month(targetMonth), 1, 0,0,0,0,time.UTC).AddDate(0,1,0)
+				mock.ExpectQuery(nextMonthNavQuery).WithArgs(groupID, nextNavTargetDate).
+					WillReturnRows(sqlmock.NewRows([]string{"YEAR(received)", "MONTH(received)"}).AddRow(2023, 12))
 			},
 			expectedStatusCode: http.StatusOK,
 			expectedBodyContains: []string{
 				fmt.Sprintf("Messages for %d-%02d", targetYear, targetMonth),
 				"No messages found for this month.",
+				"Previous Month (2023-10)",
+				"Next Month (2023-12)",
 			},
 		},
 		{
 			name: "group not found for specific month",
 			path: path,
 			setupMock: func(mock sqlmock.Sqlmock) {
+				// GetMessagesForGroupMonth fails on group lookup
 				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnError(sql.ErrNoRows)
 			},
 			expectedStatusCode:   http.StatusNotFound,
@@ -466,12 +537,16 @@ func TestServer_handleListMessages_SpecificMonth(t *testing.T) {
 			name: "database error on article query for specific month",
 			path: path,
 			setupMock: func(mock sqlmock.Sqlmock) {
+				// GetMessagesForGroupMonth succeeds group lookup but fails article query
 				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID))
 				mock.ExpectQuery(articleQuery).WithArgs(groupID, targetYear, targetMonth).WillReturnError(errors.New("specific month db error"))
+				// Since GetMessagesForGroupMonth failed, nav link DB calls won't be made by handler if it returns error early.
+				// If GetMessagesForGroupMonth returned empty list + no error, then nav link DB calls would be made.
+				// Current handler logic: if GetMessagesForGroupMonth errors, it returns early.
 			},
 			expectedStatusCode:   http.StatusInternalServerError,
 			expectedBodyContains: []string{"Failed to retrieve messages"},
-			expectDBError:        true,
+			expectDBErrorOnArticleQuery: true,
 		},
 		{
 			name:                 "invalid month format - non-numeric",
@@ -539,7 +614,7 @@ func TestServer_handleListMessages_SpecificMonth(t *testing.T) {
 
 			if err := mock.ExpectationsWereMet(); err != nil {
 				// Only fail if DB error was not expected or if it's not a bad request type error
-				if !tt.expectDBError && tt.expectedStatusCode < http.StatusBadRequest {
+				if !tt.expectDBErrorOnArticleQuery && tt.expectedStatusCode < http.StatusBadRequest { // Use the correct flag name
 					t.Errorf("sqlmock expectations were not met for path '%s': %s", tt.path, err)
 				} else if tt.expectedStatusCode >= http.StatusBadRequest && strings.Contains(err.Error(), "call to Query") {
 					// If it's a bad request, we might not expect DB calls, so an unmet expectation for query is an error
@@ -550,81 +625,117 @@ func TestServer_handleListMessages_SpecificMonth(t *testing.T) {
 	}
 }
 
-// TestServer_handleListMessages_CurrentMonth specifically tests the current month logic
-// for /group/{groupname}/
-func TestServer_handleListMessages_CurrentMonth(t *testing.T) {
+// TestServer_handleListMessages_DefaultToLatestMonth tests /group/{groupname}/
+// behavior, which should default to the latest month with messages.
+func TestServer_handleListMessages_DefaultToLatestMonth(t *testing.T) {
 	groupName := "comp.lang.go"
-	path := fmt.Sprintf("/group/%s/", groupName) // Path for routeGroupRequests to dispatch to handleListMessages
-	now := time.Now()
-	currentYear, currentMonth := now.Year(), int(now.Month())
+	path := fmt.Sprintf("/group/%s/", groupName)
 	var groupID uint16 = 1
 
+	// DB queries involved
 	groupQuery := regexp.QuoteMeta("SELECT id FROM `groups` WHERE name = ?")
+	minMaxMonthQuery := regexp.QuoteMeta("SELECT MIN(received), MAX(received) FROM articles WHERE group_id = ?")
+	countQuery := regexp.QuoteMeta("SELECT COUNT(*) FROM articles WHERE group_id = ?")
 	articleQuery := regexp.QuoteMeta(`
 		SELECT group_id, id, h_messageid, h_subject, h_from, h_date,
 		       received, thread_id, parent, h_references, h_lines, h_bytes
 		FROM articles
 		WHERE group_id = ? AND YEAR(received) = ? AND MONTH(received) = ?
 		ORDER BY received DESC, id DESC`)
-	sampleReceivedTime := time.Date(currentYear, time.Month(currentMonth), 1, 12, 0, 0, 0, time.UTC)
-
+	prevMonthNavQuery := regexp.QuoteMeta(`
+		SELECT YEAR(received), MONTH(received)
+		FROM articles
+		WHERE group_id = ? AND received < ?
+		ORDER BY received DESC
+		LIMIT 1`)
+	nextMonthNavQuery := regexp.QuoteMeta(`
+		SELECT YEAR(received), MONTH(received)
+		FROM articles
+		WHERE group_id = ? AND received >= ?
+		ORDER BY received ASC
+		LIMIT 1`)
 
 	tests := []struct {
-		name               string
-		setupMock          func(mock sqlmock.Sqlmock)
-		expectedStatusCode int
+		name                 string
+		setupMock            func(mock sqlmock.Sqlmock, latestYear, latestMonth int) // Pass latest Y/M for dynamic query setup
+		latestYear           int // For setting up mock expectations for latest month
+		latestMonth          int // For setting up mock expectations for latest month
+		expectedStatusCode   int
 		expectedBodyContains []string
 	}{
 		{
-			name: "success - messages found for current month",
-			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID))
-				articleRows := sqlmock.NewRows([]string{
-					"group_id", "id", "h_messageid", "h_subject", "h_from", "h_date",
-					"received", "thread_id", "parent", "h_references", "h_lines", "h_bytes",
-				}).AddRow(groupID, 101, "msg1@example.com", "Hello Go", "Go Gopher", "Today", sampleReceivedTime, 1, 0, "", 20, 200)
-				mock.ExpectQuery(articleQuery).WithArgs(groupID, currentYear, currentMonth).WillReturnRows(articleRows)
+			name: "success - group has messages, defaults to latest month",
+			latestYear: 2024, latestMonth: 5, // May 2024 is latest
+			setupMock: func(mock sqlmock.Sqlmock, latestY, latestM int) {
+				// 1. Call to s.db.GetMinMaxMessageMonthsForGroup
+				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID)) // Internal
+				mock.ExpectQuery(countQuery).WithArgs(groupID).WillReturnRows(sqlmock.NewRows([]string{"COUNT(*)"}).AddRow(5))
+				mock.ExpectQuery(minMaxMonthQuery).WithArgs(groupID).WillReturnRows(sqlmock.NewRows([]string{"MIN(received)", "MAX(received)"}).
+					AddRow(time.Date(2024, 3, 1, 0,0,0,0,time.UTC), time.Date(latestY, time.Month(latestM), 1, 0,0,0,0,time.UTC)))
+
+				// 2. Call to s.db.GetMessagesForGroupMonth (for latestY, latestM)
+				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID)) // Internal
+				mock.ExpectQuery(articleQuery).WithArgs(groupID, latestY, latestM).
+					WillReturnRows(sqlmock.NewRows(articleColsNoGroup).AddRow(groupID, 101, "msg@latest", "Latest", "User", "Date", time.Now(), 1,0,"",10,100))
+
+				// 3. Call to s.db.GetPrevMonthWithMessages (for latestY, latestM)
+				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID)) // Internal
+				prevNavTargetDate := time.Date(latestY, time.Month(latestM), 1, 0,0,0,0,time.UTC)
+				mock.ExpectQuery(prevMonthNavQuery).WithArgs(groupID, prevNavTargetDate).
+					WillReturnRows(sqlmock.NewRows([]string{"YEAR(received)", "MONTH(received)"}).AddRow(2024, 4))
+
+				// 4. Call to s.db.GetNextMonthWithMessages (for latestY, latestM)
+				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID)) // Internal
+				nextNavTargetDate := time.Date(latestY, time.Month(latestM), 1, 0,0,0,0,time.UTC).AddDate(0,1,0)
+				mock.ExpectQuery(nextMonthNavQuery).WithArgs(groupID, nextNavTargetDate).WillReturnError(sql.ErrNoRows)
 			},
 			expectedStatusCode: http.StatusOK,
 			expectedBodyContains: []string{
-				fmt.Sprintf("Messages for %d-%02d", currentYear, currentMonth),
-				"Hello Go", "Go Gopher",
-				// Link uses current year/month from data passed to template
-				fmt.Sprintf("/group/%s/%d/%02d/msg101.html", groupName, currentYear, currentMonth),
+				fmt.Sprintf("Messages for 2024-05"), "Latest", // Check it's showing May
+				"Previous Month (2024-04)", // Check prev link
+				"<span>Next Month &raquo;</span>", // Check next link is disabled
 			},
 		},
 		{
-			name: "success - no messages for current month",
-			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID))
-				emptyArticleRows := sqlmock.NewRows([]string{
-					"group_id", "id", "h_messageid", "h_subject", "h_from", "h_date",
-					"received", "thread_id", "parent", "h_references", "h_lines", "h_bytes",
-				})
-				mock.ExpectQuery(articleQuery).WithArgs(groupID, currentYear, currentMonth).WillReturnRows(emptyArticleRows)
+			name: "group exists but no messages, defaults to current calendar month view",
+			latestYear: time.Now().Year(), latestMonth: int(time.Now().Month()), // For handler's default calendar month
+			setupMock: func(mock sqlmock.Sqlmock, currentY, currentM int) {
+				// 1. Call to s.db.GetMinMaxMessageMonthsForGroup
+				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID)) // Internal
+				mock.ExpectQuery(countQuery).WithArgs(groupID).WillReturnRows(sqlmock.NewRows([]string{"COUNT(*)"}).AddRow(0)) // No messages
+
+				// 2. Call to s.db.GetMessagesForGroupMonth (for currentY, currentM because count was 0)
+				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID)) // Internal
+				mock.ExpectQuery(articleQuery).WithArgs(groupID, currentY, currentM).
+					WillReturnRows(sqlmock.NewRows(articleColsNoGroup))
+
+				// 3. Call to s.db.GetPrevMonthWithMessages
+				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID)) // Internal
+				prevNavTargetDate := time.Date(currentY, time.Month(currentM), 1, 0,0,0,0,time.UTC)
+				mock.ExpectQuery(prevMonthNavQuery).WithArgs(groupID, prevNavTargetDate).WillReturnError(sql.ErrNoRows)
+
+				// 4. Call to s.db.GetNextMonthWithMessages
+				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID)) // Internal
+				nextNavTargetDate := time.Date(currentY, time.Month(currentM), 1, 0,0,0,0,time.UTC).AddDate(0,1,0)
+				mock.ExpectQuery(nextMonthNavQuery).WithArgs(groupID, nextNavTargetDate).WillReturnError(sql.ErrNoRows)
 			},
 			expectedStatusCode: http.StatusOK,
 			expectedBodyContains: []string{
-				fmt.Sprintf("Messages for %d-%02d", currentYear, currentMonth),
+				fmt.Sprintf("Messages for %d-%02d", time.Now().Year(), int(time.Now().Month())), // Shows current calendar month
 				"No messages found for this month.",
+				"<span>&laquo; Previous Month</span>", // Both links disabled
+				"<span>Next Month &raquo;</span>",
 			},
 		},
 		{
-			name: "group not found for current month list",
-			setupMock: func(mock sqlmock.Sqlmock) {
+			name: "group not found", // GetMinMaxMessageMonthsForGroup returns group not found
+			latestYear: 0, latestMonth: 0, // Not relevant
+			setupMock: func(mock sqlmock.Sqlmock, _, _ int) {
 				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnError(sql.ErrNoRows)
+				// No other DB calls expected
 			},
 			expectedStatusCode: http.StatusNotFound,
 			expectedBodyContains: []string{fmt.Sprintf("Group %s not found", groupName)},
-		},
-		{
-			 name: "database error on article query for current month",
-			 setupMock: func(mock sqlmock.Sqlmock) {
-				 mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID))
-				 mock.ExpectQuery(articleQuery).WithArgs(groupID, currentYear, currentMonth).WillReturnError(errors.New("article db error"))
-			 },
-			 expectedStatusCode: http.StatusInternalServerError,
-			 expectedBodyContains: []string{"Failed to retrieve messages"},
 		},
 	}
 
@@ -639,7 +750,7 @@ func TestServer_handleListMessages_CurrentMonth(t *testing.T) {
 			testableDB := database.NewWithSQLDB(mockSqlDb)
 			s := newTestServer(t, testableDB)
 
-			tt.setupMock(mock)
+			tt.setupMock(mock, tt.latestYear, tt.latestMonth)
 
 			req := httptest.NewRequest("GET", path, nil) // Path is /group/{groupName}/
 			rr := httptest.NewRecorder()

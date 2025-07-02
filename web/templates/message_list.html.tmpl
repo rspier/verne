@@ -32,8 +32,17 @@
         <h2>Messages for {{.CurrentYear}}-{{printf "%02d" .CurrentMonth}}</h2>
 
         <div class="navigation">
-            <a href="/group/{{.GroupName}}/{{.PrevYear}}/{{printf "%02d" .PrevMonth}}.html">&laquo; Previous Month ({{.PrevYear}}-{{printf "%02d" .PrevMonth}})</a>
-            <a href="/group/{{.GroupName}}/{{.NextYear}}/{{printf "%02d" .NextMonth}}.html">Next Month ({{.NextYear}}-{{printf "%02d" .NextMonth}}) &raquo;</a>
+            {{if .PrevMonthFound}}
+                <a href="/group/{{.GroupName}}/{{.PrevYear}}/{{printf "%02d" .PrevMonth}}.html">&laquo; Previous Month ({{.PrevYear}}-{{printf "%02d" .PrevMonth}})</a>
+            {{else}}
+                <span>&laquo; Previous Month</span>
+            {{end}}
+
+            {{if .NextMonthFound}}
+                <a href="/group/{{.GroupName}}/{{.NextYear}}/{{printf "%02d" .NextMonth}}.html">Next Month ({{.NextYear}}-{{printf "%02d" .NextMonth}}) &raquo;</a>
+            {{else}}
+                <span>Next Month &raquo;</span>
+            {{end}}
         </div>
 
         {{if .Articles}}
@@ -54,8 +63,17 @@
         {{end}}
 
         <div class="navigation" style="margin-top: 30px;">
-             <a href="/group/{{.GroupName}}/{{.PrevYear}}/{{printf "%02d" .PrevMonth}}.html">&laquo; Previous Month ({{.PrevYear}}-{{printf "%02d" .PrevMonth}})</a>
-            <a href="/group/{{.GroupName}}/{{.NextYear}}/{{printf "%02d" .NextMonth}}.html">Next Month ({{.NextYear}}-{{printf "%02d" .NextMonth}}) &raquo;</a>
+            {{if .PrevMonthFound}}
+                <a href="/group/{{.GroupName}}/{{.PrevYear}}/{{printf "%02d" .PrevMonth}}.html">&laquo; Previous Month ({{.PrevYear}}-{{printf "%02d" .PrevMonth}})</a>
+            {{else}}
+                <span>&laquo; Previous Month</span>
+            {{end}}
+
+            {{if .NextMonthFound}}
+                <a href="/group/{{.GroupName}}/{{.NextYear}}/{{printf "%02d" .NextMonth}}.html">Next Month ({{.NextYear}}-{{printf "%02d" .NextMonth}}) &raquo;</a>
+            {{else}}
+                <span>Next Month &raquo;</span>
+            {{end}}
         </div>
          <p style="margin-top: 20px;"><a href="/group/">Back to All Groups</a></p>
     </div>
