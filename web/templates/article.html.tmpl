@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Article.Subject}} - {{.Article.GroupName}}</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        a { text-decoration: none; color: #007bff; }
+        a:hover { text-decoration: underline; }
+        .breadcrumb { margin-bottom: 20px; font-size: 0.9em; }
+        .article-header { border-bottom: 1px solid #eee; margin-bottom: 20px; padding-bottom: 15px; }
+        .article-header h1 { margin-top: 0; margin-bottom: 10px; font-size: 1.8em; color: #222; }
+        .article-meta { list-style: none; padding: 0; margin: 0; font-size: 0.9em; color: #555; }
+        .article-meta li { margin-bottom: 5px; }
+        .article-meta strong { color: #333; }
+        .article-body { margin-top: 20px; line-height: 1.6; white-space: pre-wrap; /* Preserve whitespace and newlines */ }
+        .thread-section { margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; }
+        .thread-section h2 { font-size: 1.4em; color: #333; margin-bottom: 10px; }
+        .thread-list { list-style-type: none; padding: 0; }
+        .thread-item { background-color: #f9f9f9; margin-bottom: 8px; padding: 10px; border-radius: 4px; border: 1px solid #eee; }
+        .thread-item-subject a { font-weight: bold; }
+        .thread-item-meta { font-size: 0.85em; color: #666; margin-top: 4px; }
+        .error-message { color: red; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        {{if .Error}}
+            <p class="error-message">Error: {{.Error}}</p>
+            <p><a href="/group/">Return to All Groups</a></p>
+        {{else if .Article}}
+            <div class="breadcrumb">
+                <a href="/group/">All Groups</a> &gt;
+                <a href="/group/{{.Article.GroupName}}/">{{.Article.GroupName}}</a> &gt;
+                <a href="/group/{{.Article.GroupName}}/{{.Article.Received.Year}}/{{printf "%02d" .Article.Received.Month}}.html">
+                    {{.Article.Received.Year}}-{{printf "%02d" .Article.Received.Month}}
+                </a> &gt;
+                Article
+            </div>
+
+            <div class="article-header">
+                <h1>{{.Article.Subject}}</h1>
+                <ul class="article-meta">
+                    <li><strong>From:</strong> {{.Article.From}}</li>
+                    <li><strong>Date:</strong> {{.Article.Date}}</li>
+                    <li><strong>Message-ID:</strong> <code>&lt;{{.Article.MessageID}}&gt;</code></li>
+                    <li><strong>Lines:</strong> {{.Article.Lines}}</li>
+                    <li><strong>Bytes:</strong> {{.Article.Bytes}}</li>
+                    <li><strong>Raw Link:</strong>
+                        <a href="/group/{{.Article.GroupName}}/{{.Article.Received.Year}}/{{printf "%02d" .Article.Received.Month}}/msg{{.Article.ArticleNum}}.html" rel="canonical">
+                            /group/{{.Article.GroupName}}/{{.Article.Received.Year}}/{{printf "%02d" .Article.Received.Month}}/msg{{.Article.ArticleNum}}.html
+                        </a>
+                    </li>
+                     <li><strong>Message-ID Lookup Link:</strong>
+                        <a href="/group/{{.Article.GroupName}}/;.msgid={{.Article.MessageID}}">
+                            /group/{{.Article.GroupName}}/;.msgid={{.Article.MessageID}}
+                        </a>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="article-body">
+                {{if .ArticleBody}}
+                    <pre>{{.ArticleBody}}</pre> {{/* Using <pre> for plain text body for now */}}
+                {{else}}
+                    <p><em>Article body is not stored in the database. It would be fetched from the NNTP server here.</em></p>
+                {{end}}
+            </div>
+
+            {{if .ThreadMessages}}
+            <div class="thread-section">
+                <h2>Other Messages in This Thread</h2>
+                <ul class="thread-list">
+                    {{range .ThreadMessages}}
+                    <li class="thread-item">
+                        <div class="thread-item-subject">
+                             <a href="/group/{{.GroupName}}/{{.Received.Year}}/{{printf "%02d" .Received.Month}}/msg{{.ArticleNum}}.html">{{.Subject}}</a>
+                        </div>
+                        <div class="thread-item-meta">
+                            From: {{.From}} | Date: {{.Date}}
+                        </div>
+                    </li>
+                    {{end}}
+                </ul>
+            </div>
+            {{else}}
+             <div class="thread-section">
+                <h2>Other Messages in This Thread</h2>
+                <p>No other messages found in this thread.</p>
+            </div>
+            {{end}}
+            <p style="margin-top:30px;"><a href="/group/{{.Article.GroupName}}/{{.Article.Received.Year}}/{{printf "%02d" .Article.Received.Month}}.html">Back to Message List</a></p>
+        {{else}}
+            <p>Article not found.</p>
+            <p><a href="/group/">Return to All Groups</a></p>
+        {{end}}
+    </div>
+</body>
+</html>

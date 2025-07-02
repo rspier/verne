@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Messages in {{.GroupName}} - {{.CurrentYear}}/{{printf "%02d" .CurrentMonth}}</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        h1, h2 { color: #333; }
+        a { text-decoration: none; color: #007bff; }
+        a:hover { text-decoration: underline; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .message-list { list-style-type: none; padding: 0; }
+        .message-item { border-bottom: 1px solid #eee; padding: 10px 0; }
+        .message-item:last-child { border-bottom: none; }
+        .message-subject a { font-weight: bold; font-size: 1.1em; }
+        .message-meta { font-size: 0.9em; color: #555; margin-top: 5px; }
+        .message-from { font-style: italic; }
+        .navigation { margin-top: 20px; display: flex; justify-content: space-between; }
+        .no-messages { color: #777; }
+        .breadcrumb { margin-bottom: 20px; font-size: 0.9em; }
+        .breadcrumb a { color: #007bff; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="breadcrumb">
+            <a href="/group/">All Groups</a> &gt; {{.GroupName}}
+        </div>
+
+        <h1>{{.GroupName}}</h1>
+        <h2>Messages for {{.CurrentYear}}-{{printf "%02d" .CurrentMonth}}</h2>
+
+        <div class="navigation">
+            <a href="/group/{{.GroupName}}/{{.PrevYear}}/{{printf "%02d" .PrevMonth}}.html">&laquo; Previous Month ({{.PrevYear}}-{{printf "%02d" .PrevMonth}})</a>
+            <a href="/group/{{.GroupName}}/{{.NextYear}}/{{printf "%02d" .NextMonth}}.html">Next Month ({{.NextYear}}-{{printf "%02d" .NextMonth}}) &raquo;</a>
+        </div>
+
+        {{if .Articles}}
+        <ul class="message-list">
+            {{range .Articles}}
+            <li class="message-item">
+                <div class="message-subject">
+                    <a href="/group/{{.GroupName}}/{{$.CurrentYear}}/{{printf "%02d" $.CurrentMonth}}/msg{{.ArticleNum}}.html">{{.Subject}}</a>
+                </div>
+                <div class="message-meta">
+                    From: <span class="message-from">{{.From}}</span> | Date: {{.Date}}
+                </div>
+            </li>
+            {{end}}
+        </ul>
+        {{else}}
+        <p class="no-messages">No messages found for this month.</p>
+        {{end}}
+
+        <div class="navigation" style="margin-top: 30px;">
+             <a href="/group/{{.GroupName}}/{{.PrevYear}}/{{printf "%02d" .PrevMonth}}.html">&laquo; Previous Month ({{.PrevYear}}-{{printf "%02d" .PrevMonth}})</a>
+            <a href="/group/{{.GroupName}}/{{.NextYear}}/{{printf "%02d" .NextMonth}}.html">Next Month ({{.NextYear}}-{{printf "%02d" .NextMonth}}) &raquo;</a>
+        </div>
+         <p style="margin-top: 20px;"><a href="/group/">Back to All Groups</a></p>
+    </div>
+
+    {{if .Error}}
+    <p style="color: red;">Error: {{.Error}}</p>
+    {{end}}
+</body>
+</html>
