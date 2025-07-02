@@ -1,9 +1,7 @@
 // --- Type Declarations for Global Libraries (loaded via CDN) ---
 declare var jsQR: any; // jsQR library
 declare var xxhash: any; // xxhash-wasm library
-// Assuming the 'base85' npm package (loaded from unpkg) exposes a global 'base85' object
-// with a 'decode' method. It might take a variant argument.
-declare var base85: { decode: (input: string, variant?: string) => Uint8Array | { type: 'Buffer', data: number[] } | string }; // Some libs return string, needs check
+// No longer declaring external ASCII85 library, will use native implementation.
 declare var ZstdDec: { decompress: (compressedData: Uint8Array) => Uint8Array }; // Placeholder for ZSTD lib
 
 // --- DOM Element References ---
@@ -37,6 +35,68 @@ let h64: any = null;
 
 
 // --- Utility Functions (to be filled in later or moved to utils.ts) ---
+
+function decodeAdobeAscii85(a85: string): Uint8Array {
+    // Remove whitespace. Go's encoder doesn't add it, but robust decoders often handle it.
+    const cleanA85 = a85.replace(/\s/g, '');
+    const n = cleanA85.length;
+
+    // According to Go's encoding/ascii85, "z" and "y" are not used by the Encoder if the result would need padding.
+    // This simplifies decoding "z" and "y" as they always represent 4 bytes.
+
+    let decodedBytes: number[] = [];
+
+    for (let i = 0; i < n; ) {
+        const char = cleanA85[i];
+
+        if (char === 'z') {
+            decodedBytes.push(0, 0, 0, 0);
+            i++;
+            continue;
+        }
+        if (char === 'y') {
+            decodedBytes.push(32, 32, 32, 32);
+            i++;
+            continue;
+        }
+
+        // Process a 5-char block
+        let val = 0;
+        const charsInBlock = Math.min(5, n - i);
+
+        if (charsInBlock === 1) { // Should not happen with valid Adobe ASCII85 if not delimited
+            throw new Error("Invalid ASCII85: block of 1 char found mid-stream.");
+        }
+
+        for (let j = 0; j < 5; j++) {
+            let c: number;
+            if (j < charsInBlock) {
+                c = cleanA85.charCodeAt(i + j);
+                if (c < 33 || c > 117) { // '!' to 'u'
+                    throw new Error(`Invalid ASCII85 character '${cleanA85[i+j]}' at index ${i+j}`);
+                }
+                val = val * 85 + (c - 33);
+            } else { // Padding for the last block
+                val = val * 85 + 84; // Pad with 'u'
+            }
+        }
+        i += charsInBlock;
+
+        // Extract bytes
+        const numBytesToOutput = charsInBlock - 1;
+        decodedBytes.push((val >> 24) & 0xFF);
+        if (numBytesToOutput > 1) decodedBytes.push((val >> 16) & 0xFF);
+        if (numBytesToOutput > 2) decodedBytes.push((val >> 8) & 0xFF);
+        if (numBytesToOutput > 3) decodedBytes.push(val & 0xFF);
+
+        // If padded, trim the output array to the correct number of bytes for this block
+        if (charsInBlock < 5) {
+            decodedBytes = decodedBytes.slice(0, decodedBytes.length - (4 - numBytesToOutput));
+        }
+    }
+    return new Uint8Array(decodedBytes);
+}
+
 
 /**
  * Reads a Big Endian Uint32 from a Uint8Array at a given offset.
@@ -318,34 +378,11 @@ function processFrame() {
             const ascii85Payload = code.data;
             let finalPayloadBytes: Uint8Array;
             try {
-                // Decode ASCII85 using the assumed global 'base85' library
-                if (typeof base85 === 'undefined' || typeof base85.decode !== 'function') {
-                    throw new Error("Base85 decoding library ('base85.decode') not found or not a function. Please ensure it's loaded correctly (e.g., via CDN).");
-                }
-                // Attempt to specify 'ascii85' variant if the library supports it.
-                // The Go encoder uses Adobe's flavor of ASCII85.
-                let decodedOutput = base85.decode(ascii85Payload, 'ascii85');
-
-                // Check if the output is a Node.js-like Buffer object and convert if necessary
-                if (decodedOutput && (decodedOutput as any).type === 'Buffer' && Array.isArray((decodedOutput as any).data)) {
-                    finalPayloadBytes = new Uint8Array((decodedOutput as any).data);
-                } else if (decodedOutput instanceof Uint8Array) {
-                    finalPayloadBytes = decodedOutput;
-                } else if (typeof decodedOutput === 'string') {
-                    // Some base85 libraries might decode to a binary string, similar to atob. Convert this.
-                    finalPayloadBytes = new Uint8Array(decodedOutput.length);
-                    for (let i = 0; i < decodedOutput.length; i++) {
-                        finalPayloadBytes[i] = decodedOutput.charCodeAt(i);
-                    }
-                } else {
-                    console.error("Unrecognized ASCII85 decode output:", decodedOutput);
-                    throw new Error("ASCII85 decode function returned an unrecognized type.");
-                }
-
+                finalPayloadBytes = decodeAdobeAscii85(ascii85Payload);
             } catch (e: any) {
                 t5 = performance.now(); // Still record time up to the error
                 dataProcessingDuration = t5 - t4;
-                updateStatus(`Frame ${frameCounter}: Error Base85-decoding payload (variant ascii85): ${e.message} (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
+                updateStatus(`Frame ${frameCounter}: Error ASCII85-decoding payload: ${e.message} (DataProc: ${dataProcessingDuration.toFixed(1)}ms)`, true);
                 timingInfo.textContent = `Capture: ${captureDuration.toFixed(1)}ms, Scan: ${scanDuration.toFixed(1)}ms, Data: ${dataProcessingDuration.toFixed(1)}ms (ERR), Total: ${(captureDuration + scanDuration + dataProcessingDuration).toFixed(1)}ms`;
                 return;
             }
