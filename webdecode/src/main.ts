@@ -2,7 +2,22 @@
 declare var jsQR: any; // jsQR library
 declare var xxhash: any; // xxhash-wasm library
 // No longer declaring external ASCII85 library, will use native implementation.
-declare var ZstdDec: { decompress: (compressedData: Uint8Array) => Uint8Array }; // Placeholder for ZSTD lib
+// Assuming zstd-codec is loaded globally from jsDelivr CDN
+interface ZstdSimpleApi {
+    compress: (data: Uint8Array, level?: number) => Uint8Array;
+    decompress: (data: Uint8Array) => Uint8Array;
+}
+interface ZstdApi {
+    Simple: new () => ZstdSimpleApi;
+    // Streaming, Dict APIs can be added if needed
+}
+declare var ZstdCodec: {
+    run: (onReady: (zstd: ZstdApi) => void) => void;
+};
+
+// --- Global instances for initialized libraries ---
+let h64: any = null; // For xxhash
+let zstdSimple: ZstdSimpleApi | null = null; // For ZstdCodec.Simple API
 
 // --- DOM Element References ---
 const videoElement = document.getElementById('video') as HTMLVideoElement | null;
@@ -29,10 +44,6 @@ let collectedChunks: Map<number, Uint8Array> = new Map();
 let highestSequenceNumberSeen = -1;
 let totalChunksExpected = -1; // -1 means unknown, otherwise it's N if 0 to N-1 chunks are expected.
 let presumedEncoderChunkSize = 1024; // Default from encode/main.go, can be refined if needed
-
-// To store the initialized XXHash64 instance
-let h64: any = null;
-
 
 // --- Utility Functions (to be filled in later or moved to utils.ts) ---
 
@@ -223,6 +234,42 @@ async function initXxhash() {
     }
 }
 
+/**
+ * Initializes the ZstdCodec WASM module.
+ */
+function initZstdCodec(): Promise<void> {
+    return new Promise((resolve, reject) => {
+        if (zstdSimple) { // Already initialized
+            resolve();
+            return;
+        }
+        if (typeof ZstdCodec === 'undefined' || typeof ZstdCodec.run !== 'function') {
+            const errMsg = "ZstdCodec global object or .run method not found. Ensure zstd-codec.js is loaded.";
+            updateStatus(errMsg, true);
+            reject(new Error(errMsg));
+            return;
+        }
+        try {
+            updateStatus("Initializing ZSTD Codec (WASM)...");
+            ZstdCodec.run((zstd: ZstdApi) => {
+                if (!zstd || !zstd.Simple) {
+                    const errMsg = "ZSTD API (zstd.Simple) not available after ZstdCodec.run().";
+                    updateStatus(errMsg, true);
+                    reject(new Error(errMsg));
+                    return;
+                }
+                zstdSimple = new zstd.Simple();
+                updateStatus("ZSTD Codec initialized successfully.");
+                resolve();
+            });
+        } catch (err: any) {
+            const errMsg = `Error during ZstdCodec.run() call: ${err.message || err}`;
+            updateStatus(errMsg, true);
+            reject(new Error(errMsg));
+        }
+    });
+}
+
 
 // --- Main Application Logic (to be filled in: startCapture, stopCapture, processFrame, assembleData) ---
 
@@ -236,8 +283,16 @@ if (!videoElement || !canvasElement || !startBtn || !stopBtn || !statusOutput ||
     stopBtn.disabled = true;
     downloadLink.style.display = 'none';
 
-    // Initialize XXHash - this will attempt to enable startBtn upon success
-    initXxhash();
+    // Initialize necessary libraries
+    Promise.all([initXxhash(), initZstdCodec()])
+        .then(() => {
+            updateStatus("Application ready. You can start screen capture.");
+            if (startBtn) startBtn.disabled = false;
+        })
+        .catch(error => {
+            updateStatus(`Initialization failed: ${error.message || error}`, true);
+            if (startBtn) startBtn.disabled = true; // Keep disabled if any critical init fails
+        });
 
     startBtn.addEventListener('click', startCapture);
     stopBtn.addEventListener('click', stopCapture);
@@ -567,16 +622,16 @@ function assembleData() {
 
     let finalDecompressedData: Uint8Array;
     try {
-        if (typeof ZstdDec === 'undefined' || typeof ZstdDec.decompress !== 'function') {
-            throw new Error("ZSTD Decompression library (ZstdDec.decompress) not found or not a function.");
+        // Ensure fflate and its unzstd method are available
+        if (typeof fflate === 'undefined' || typeof fflate.unzstd !== 'function') {
+            throw new Error("ZSTD Decompression library (fflate.unzstd) not found or not a function. Ensure fflate is loaded.");
         }
-        finalDecompressedData = ZstdDec.decompress(reassembledCompressedData);
-        updateStatus(`Data decompressed successfully. Original size: ${finalDecompressedData.length} bytes.`);
+        finalDecompressedData = fflate.unzstd(reassembledCompressedData); // Use fflate
+        updateStatus(`Data decompressed successfully using fflate. Original size: ${finalDecompressedData.length} bytes.`);
     } catch (err: any) {
-        updateStatus(`Error during ZSTD decompression: ${err.message || err}. Displaying raw compressed data instead.`, true);
-        // Fallback to allowing download of the (raw) compressed data if decompression fails
-        finalDecompressedData = reassembledCompressedData; // Or handle differently, e.g., clear outputTextarea
-        outputTextarea.value = "<Error during ZSTD decompression. Raw (compressed) data might be available for download.>";
+        updateStatus(`Error during ZSTD decompression with fflate: ${err.message || err}. Displaying raw compressed data instead.`, true);
+        finalDecompressedData = reassembledCompressedData;
+        outputTextarea.value = "<Error during ZSTD decompression (fflate). Raw (compressed) data might be available for download.>";
     }
 
 
