@@ -1,7 +1,9 @@
 // --- Type Declarations for Global Libraries (loaded via CDN) ---
 declare var jsQR: any; // jsQR library
 declare var xxhash: any; // xxhash-wasm library
-declare var CoolAscii85: { decode: (ascii85String: string) => Uint8Array }; // Placeholder for ASCII85 lib
+// Assuming the 'ascii85' npm package (loaded from unpkg) exposes a global 'ascii85' object
+// with a 'decode' method. The return type might be a Buffer or Uint8Array.
+declare var ascii85: { decode: (input: string) => Uint8Array | { type: 'Buffer', data: number[] } };
 declare var ZstdDec: { decompress: (compressedData: Uint8Array) => Uint8Array }; // Placeholder for ZSTD lib
 
 // --- DOM Element References ---
@@ -316,11 +318,22 @@ function processFrame() {
             const ascii85Payload = code.data;
             let finalPayloadBytes: Uint8Array;
             try {
-                // Decode ASCII85 using the placeholder library function
-                if (typeof CoolAscii85 === 'undefined' || typeof CoolAscii85.decode !== 'function') {
-                    throw new Error("ASCII85 decoding library (CoolAscii85.decode) not found or not a function.");
+                // Decode ASCII85 using the assumed global 'ascii85' library
+                if (typeof ascii85 === 'undefined' || typeof ascii85.decode !== 'function') {
+                    throw new Error("ASCII85 decoding library ('ascii85.decode') not found or not a function. Please ensure it's loaded correctly (e.g., via CDN).");
                 }
-                finalPayloadBytes = CoolAscii85.decode(ascii85Payload);
+                let decodedOutput = ascii85.decode(ascii85Payload);
+
+                // Check if the output is a Node.js-like Buffer object and convert if necessary
+                // This is a common pattern for libraries that work in both Node and browser (via shims/globals)
+                if (decodedOutput && (decodedOutput as any).type === 'Buffer' && Array.isArray((decodedOutput as any).data)) {
+                    finalPayloadBytes = new Uint8Array((decodedOutput as any).data);
+                } else if (decodedOutput instanceof Uint8Array) {
+                    finalPayloadBytes = decodedOutput;
+                } else {
+                    throw new Error("ASCII85 decode function did not return a Uint8Array or a recognized Buffer-like object.");
+                }
+
             } catch (e: any) {
                 t5 = performance.now(); // Still record time up to the error
                 dataProcessingDuration = t5 - t4;
