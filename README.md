@@ -11,11 +11,12 @@ It aims to provide a user-friendly interface for reading articles and navigating
     *   Specific month: `/group/{groupname}/{year}/{month}.html`.
 *   Display individual articles (`/group/{groupname}/{year}/{month}/msg{id}.html`):
     *   Fetches full raw article from NNTP server (basic reconnect logic implemented).
-    *   Parses MIME content, preferring sanitized HTML (via `bluemonday`) over plain text.
+    *   Parses MIME content, preferring sanitized HTML (via `bluemonday`) over plain text; HTML content is rendered correctly.
     *   Indicates if other non-text MIME parts exist.
-    *   Displays only Subject, From, Date, and MessageID prominently.
+    *   Displays Subject, From (obfuscated), Date, and MessageID (as a link) prominently. Other less critical headers/links removed from main view.
 *   Show other messages in the same thread (flat list) at the bottom of an article page. (Advanced JWZ threading is prepared in models but deferred in display).
 *   Redirects for canonical article URLs (by Message-ID or correct date, with `;.msgid=` as a path parameter).
+*   In-memory caching layer for database queries (configurable TTL).
 
 ## Tech Stack
 
@@ -62,6 +63,7 @@ It aims to provide a user-friendly interface for reading articles and navigating
 *   `-db-name`: Database name (default: `nntp_cache`)
 *   `-server-port`: HTTP server port (default: `8080`)
 *   `-nntp-server`: Backend NNTP server address (host:port) (default: `news.example.com:119`) - Used by the internal NNTP client to fetch article bodies.
+*   `-cache-ttl`: Default cache TTL in seconds for database query results (default: `300`).
 ```
 
 ## Docker Build and Run

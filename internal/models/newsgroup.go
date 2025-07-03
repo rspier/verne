@@ -28,5 +28,6 @@ type Article struct {
 	Bytes       uint32    `json:"bytes"`       // Corresponds to articles.h_bytes
 
 	// Fields to be populated by joining with `groups` table or for display logic
-	GroupName string `json:"group_name,omitempty"` // Name of the newsgroup
+	GroupName   string `json:"group_name,omitempty"` // Name of the newsgroup
+	DisplayFrom string `json:"display_from,omitempty"` // Obfuscated 'From' for display
 }

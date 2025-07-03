@@ -12,10 +12,11 @@ type Config struct {
 	DBHost     string
 	DBPort     int
 	DBUser     string
-	DBPass     string
-	DBName     string
-	ServerPort int
-	NNTPServer string // Expected format: "host:port"
+	DBPass          string
+	DBName          string
+	ServerPort      int
+	NNTPServer      string // Expected format: "host:port"
+	CacheTTLSeconds int    // Cache TTL in seconds
 }
 
 // Load parses command-line flags and environment variables to populate the Config struct.
@@ -31,6 +32,7 @@ func Load() (*Config, error) {
 	flag.StringVar(&cfg.DBName, "db-name", "nntp_cache", "Database name")
 	flag.IntVar(&cfg.ServerPort, "server-port", 8080, "HTTP server port")
 	flag.StringVar(&cfg.NNTPServer, "nntp-server", "news.example.com:119", "NNTP server address (host:port)")
+	flag.IntVar(&cfg.CacheTTLSeconds, "cache-ttl", 300, "Default cache TTL in seconds (e.g., 300 for 5 minutes)")
 
 	// Environment variable overrides (optional, but good practice)
 	// Example: NNT WEB_DB_HOST=myhost
@@ -62,6 +64,13 @@ func Load() (*Config, error) {
 	}
 	if nntpServer := os.Getenv("NNTPWEB_NNTP_SERVER"); nntpServer != "" {
 		cfg.NNTPServer = nntpServer
+	}
+	if ttlStr := os.Getenv("NNTPWEB_CACHE_TTL_SECONDS"); ttlStr != "" {
+		if ttl, err := strconv.Atoi(ttlStr); err == nil {
+			cfg.CacheTTLSeconds = ttl
+		} else {
+			return nil, fmt.Errorf("invalid NNTPWEB_CACHE_TTL_SECONDS: %w", err)
+		}
 	}
 
 	// Parse flags after setting defaults and checking environment variables

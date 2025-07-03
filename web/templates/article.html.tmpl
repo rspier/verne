@@ -43,20 +43,12 @@
             <div class="article-header">
                 <h1>{{.Article.Subject}}</h1>
                 <ul class="article-meta">
-                    <li><strong>From:</strong> {{.Article.From}}</li>
+                    <li><strong>From:</strong> {{.Article.DisplayFrom}}</li>
                     <li><strong>Date:</strong> {{.Article.Date}}</li>
-                    <li><strong>Message-ID:</strong> <code>&lt;{{.Article.MessageID}}&gt;</code></li>
-                    <!-- Lines and Bytes removed as per refinement -->
-                    <li><strong>Raw Link:</strong>
-                        <a href="/group/{{.Article.GroupName}}/{{.Article.Received.Year}}/{{printf "%02d" .Article.Received.Month}}/msg{{.Article.ArticleNum}}.html" rel="canonical">
-                            /group/{{.Article.GroupName}}/{{.Article.Received.Year}}/{{printf "%02d" .Article.Received.Month}}/msg{{.Article.ArticleNum}}.html
-                        </a>
+                    <li><strong>Message-ID:</strong>
+                        <code>&lt;<a href="/group/{{.Article.GroupName}}/;.msgid={{.Article.MessageID}}">{{.Article.MessageID}}</a>&gt;</code>
                     </li>
-                     <li><strong>Message-ID Lookup Link:</strong>
-                        <a href="/group/{{.Article.GroupName}}/;.msgid={{.Article.MessageID}}">
-                            /group/{{.Article.GroupName}}/;.msgid={{.Article.MessageID}}
-                        </a>
-                    </li>
+                    <!-- Lines, Bytes, Raw Link, and Message-ID Lookup Link removed or consolidated -->
                 </ul>
             </div>
 
@@ -85,7 +77,7 @@
                              <a href="/group/{{.GroupName}}/{{.Received.Year}}/{{printf "%02d" .Received.Month}}/msg{{.ArticleNum}}.html">{{.Subject}}</a>
                         </div>
                         <div class="thread-item-meta">
-                            From: {{.From}} | Date: {{.Date}}
+                            From: {{.DisplayFrom}} | Date: {{.Date}}
                         </div>
                     </li>
                     {{end}}

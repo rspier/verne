@@ -7,13 +7,15 @@ import (
 	"log"
 	"net/http"
 	"nntp-web/web/templates" // For template name constants
+	htmltemplate "html/template" // Added for template.HTML type
 	// "net/mail"     // For mail.ParseDate - No longer used after commenting out JWZ date parsing
 	"strconv"      // For strconv.Atoi, strconv.ParseUint
 	"strings"      // For strings.Split, strings.Trim, etc.
 	"time"         // For time.Now, time.Date
 
 	// "nntp-web/internal/models"    // For models.Article - No longer used directly here after commenting out JWZ
-	"nntp-web/internal/mimeparser"   // Added for mimeparser.ParseArticle
+	"nntp-web/internal/mimeparser" // Added for mimeparser.ParseArticle
+	"nntp-web/internal/utils"      // Added for formatters
 	// threadlib "github.com/gatherstars-com/jwz" // For threading, aliased - Temporarily commented out
 )
 
@@ -144,6 +146,11 @@ func (s *Server) handleListMessages() http.HandlerFunc {
 				http.Error(w, "Failed to retrieve messages.", http.StatusInternalServerError)
 			}
 			return
+		}
+
+		// Obfuscate 'From' field for display
+		for i := range articles {
+			articles[i].DisplayFrom = utils.ObfuscateEmailInFromHeader(articles[i].From)
 		}
 
 		/* // Temporarily commented out JWZ threading logic
@@ -321,7 +328,11 @@ func (s *Server) handleShowArticle() http.HandlerFunc {
 						// As a fallback, display the raw content if parsing fails badly.
 						// Ensure it's treated as plain text by template.
 					} else {
-						displayBody = parsedArt.PreferredBody
+						if parsedArt.IsHTML {
+							displayBody = string(htmltemplate.HTML(parsedArt.PreferredBody)) // Convert sanitized HTML to template.HTML
+						} else {
+							displayBody = parsedArt.PreferredBody // Plain text
+						}
 						isHTML = parsedArt.IsHTML
 						otherPartsExist = parsedArt.OtherPartsExist
 						log.Printf("Article %s: Preferred body is HTML: %v, Other parts: %v", article.MessageID, isHTML, otherPartsExist)
@@ -335,10 +346,23 @@ func (s *Server) handleShowArticle() http.HandlerFunc {
 			data := map[string]interface{}{
 				"Article":         article,
 				"ThreadMessages":  threadMessages,
-				"ArticleContent":  displayBody,     // Renamed from ArticleBody for clarity
-				"IsHTMLContent":   isHTML,          // Flag for template
-				"OtherPartsExist": otherPartsExist, // Flag for template
+				"ArticleContent":  displayBody,
+				"IsHTMLContent":   isHTML,
+				"OtherPartsExist": otherPartsExist,
 			}
+
+			// Obfuscate From for main article and thread messages
+			article.DisplayFrom = utils.ObfuscateEmailInFromHeader(article.From)
+			for i := range threadMessages {
+				threadMessages[i].DisplayFrom = utils.ObfuscateEmailInFromHeader(threadMessages[i].From)
+			}
+			// Update data map after modification (or modify article in place before map creation if not a pointer)
+			// Since article and threadMessages are slices/structs, modifications reflect.
+			// However, it's cleaner to ensure data map gets the final state.
+			// data["Article"] = article // if article was a copy
+			// data["ThreadMessages"] = threadMessages // if threadMessages was a copy
+			// For now, assume direct modification is fine as they are passed as reference/slice.
+
 			s.renderTemplate(w, r, templates.ArticleView, data)
 			return
 		}

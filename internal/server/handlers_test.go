@@ -113,7 +113,12 @@ func TestServer_handleShowArticle(t *testing.T) {
 					WillReturnRows(sqlmock.NewRows(articleWithGroupCols)) // No other thread messages
 			},
 			expectedStatusCode: http.StatusOK,
-			expectedBodyContains: []string{"Test Subject", "<strong>From:</strong> Test From", "<strong>Message-ID:</strong> <code>&lt;article123@example.com&gt;</code>", "No other messages found in this thread."},
+			expectedBodyContains: []string{
+				"Test Subject",
+				"<strong>From:</strong> Test From",
+				`<code>&lt;<a href="/group/test.group/;.msgid=article123@example.com">article123@example.com</a>&gt;</code>`,
+				"No other messages found in this thread.",
+			},
 		},
 		{
 			name: "canonical path - date mismatch redirect",

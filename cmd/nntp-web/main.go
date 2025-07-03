@@ -6,6 +6,7 @@ import (
 	"net/http" // For http.ErrServerClosed
 	"os"
 
+	"nntp-web/internal/cache"      // Added
 	"nntp-web/internal/config"
 	"nntp-web/internal/database"   // Added
 	"nntp-web/internal/nntpclient" // Added
@@ -35,8 +36,12 @@ func main() {
 	log.Printf("  Server Port: %d", cfg.ServerPort)
 	log.Printf("  NNTP Server: %s", cfg.NNTPServer)
 
+	// Initialize Cache
+	appCache := cache.NewCache()
+	log.Println("In-memory cache initialized.")
+
 	// Initialize Database Connection
-	db, err := database.New(cfg)
+	db, err := database.New(cfg, appCache) // Pass cache to DB
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}

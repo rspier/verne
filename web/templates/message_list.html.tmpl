@@ -58,7 +58,7 @@
                     <a href="/group/{{.GroupName}}/{{$.CurrentYear}}/{{printf "%02d" $.CurrentMonth}}/msg{{.ArticleNum}}.html">{{.Subject}}</a>
                 </div>
                 <div class="message-meta">
-                    From: <span class="message-from">{{.From}}</span> | Date: {{.Date}}
+                    From: <span class="message-from">{{.DisplayFrom}}</span> | Date: {{.Date}}
                 </div>
             </li>
             {{end}}
