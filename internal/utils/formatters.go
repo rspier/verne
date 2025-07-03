@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"mime" // Added for WordDecoder
 	"net/mail"
 	"strings"
 )
@@ -33,10 +34,20 @@ func ObfuscateEmailInFromHeader(fromHeader string) string {
 		return fromHeader
 	}
 
-	// If a display name exists and it's not just "<>", return it.
+	displayName := addr.Name
+	if displayName != "" {
+		dec := new(mime.WordDecoder)
+		decodedName, err := dec.DecodeHeader(displayName)
+		if err == nil {
+			displayName = decodedName
+		}
+		// If decoding fails, we'll use the original addr.Name
+	}
+
+	// If a display name exists (after potential decoding) and it's not just "<>", return it.
 	// Otherwise, proceed to obfuscate the email address part.
-	if addr.Name != "" && strings.TrimSpace(addr.Name) != "<>" && addr.Name != `""` {
-		return addr.Name
+	if displayName != "" && strings.TrimSpace(displayName) != "<>" && displayName != `""` {
+		return displayName
 	}
 
 	// No valid display name, obfuscate the address part

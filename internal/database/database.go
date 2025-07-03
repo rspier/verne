@@ -9,6 +9,7 @@ import (
 	"nntp-web/internal/config"
 	"nntp-web/internal/models"
 	"nntp-web/internal/cache" // Added for cache
+	"strings"                 // Added
 
 	_ "github.com/go-sql-driver/mysql" // MySQL driver
 )
@@ -155,8 +156,9 @@ func (db *DB) GetMessagesForGroupMonth(groupName string, year int, month int) ([
 	for rows.Next() {
 		var article models.Article
 		article.GroupName = groupName // Populate GroupName
+		var rawMsgID string
 		if err := rows.Scan(
-			&article.GroupID, &article.ArticleNum, &article.MessageID, &article.Subject,
+			&article.GroupID, &article.ArticleNum, &rawMsgID, &article.Subject,
 			&article.From, &article.Date, &article.Received, &article.ThreadID,
 			&article.ParentNum, &article.RawReferences, &article.Lines, &article.Bytes,
 		); err != nil {
@@ -165,6 +167,7 @@ func (db *DB) GetMessagesForGroupMonth(groupName string, year int, month int) ([
 			// return nil, fmt.Errorf("failed to scan article row: %w", err)
 			continue // Skip problematic row
 		}
+		article.MessageID = strings.Trim(rawMsgID, "<>")
 		article.References = models.ParseReferencesString(article.RawReferences)
 		articles = append(articles, article)
 	}
@@ -400,43 +403,50 @@ func (db *DB) GetArticleByDetails(groupName string, year int, month int, article
 	// The handler will decide if a redirect is needed based on `article.Received` vs URL year/month.
 
 	var article models.Article
-	article.GroupName = groupName // Populate GroupName
+	article.GroupName = groupName
+	var rawMsgID string
 
 	err = db.sqlDB.QueryRow(articleQuery, groupID, articleNum, year, month).Scan(
-		&article.GroupID, &article.ArticleNum, &article.MessageID, &article.Subject,
+		&article.GroupID, &article.ArticleNum, &rawMsgID, &article.Subject,
 		&article.From, &article.Date, &article.Received, &article.ThreadID,
 		&article.ParentNum, &article.RawReferences, &article.Lines, &article.Bytes,
 	)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			// Attempt to find the article by group_id and articleNum only, to check if year/month were wrong
-			relaxedArticleQuery := `
-				SELECT group_id, id, h_messageid, h_subject, h_from, h_date,
-					   received, thread_id, parent, h_references, h_lines, h_bytes
-				FROM articles
-				WHERE group_id = ? AND id = ?
-				LIMIT 1`
-			var relaxedArticle models.Article
-			relaxedArticle.GroupName = groupName
-			errRelaxed := db.sqlDB.QueryRow(relaxedArticleQuery, groupID, articleNum).Scan(
-				&relaxedArticle.GroupID, &relaxedArticle.ArticleNum, &relaxedArticle.MessageID, &relaxedArticle.Subject,
-				&relaxedArticle.From, &relaxedArticle.Date, &relaxedArticle.Received, &relaxedArticle.ThreadID,
-				&relaxedArticle.ParentNum, &relaxedArticle.RawReferences, &relaxedArticle.Lines, &relaxedArticle.Bytes,
-			)
-			if errRelaxed == nil {
-				relaxedArticle.References = models.ParseReferencesString(relaxedArticle.RawReferences)
-				return &relaxedArticle, nil
+	if err == nil {
+		article.MessageID = strings.Trim(rawMsgID, "<>")
+		article.References = models.ParseReferencesString(article.RawReferences)
+	} else if err == sql.ErrNoRows {
+		// Attempt to find the article by group_id and articleNum only, to check if year/month were wrong
+		relaxedArticleQuery := `
+			SELECT group_id, id, h_messageid, h_subject, h_from, h_date,
+					received, thread_id, parent, h_references, h_lines, h_bytes
+			FROM articles
+			WHERE group_id = ? AND id = ?
+			LIMIT 1`
+		var relaxedRawMsgID string
+		// article struct is reused, GroupName is already set.
+		errRelaxed := db.sqlDB.QueryRow(relaxedArticleQuery, groupID, articleNum).Scan(
+			&article.GroupID, &article.ArticleNum, &relaxedRawMsgID, &article.Subject,
+			&article.From, &article.Date, &article.Received, &article.ThreadID,
+			&article.ParentNum, &article.RawReferences, &article.Lines, &article.Bytes,
+		)
+		if errRelaxed == nil {
+			article.MessageID = strings.Trim(relaxedRawMsgID, "<>")
+			article.References = models.ParseReferencesString(article.RawReferences)
+			// This is the article to return (for redirect), cache it under the original key
+			if db.cache != nil {
+				db.cache.Set(cacheKey, &article, db.cacheTTL)
+				log.Printf("Cached result (after relaxed query) for GetArticleByDetails: %s", cacheKey)
 			}
-			// If still not found, then it's a genuine ErrNoRows for this group/articleNum combination.
-			return nil, fmt.Errorf("article num %d in group '%s' (year %d, month %d) not found: %w", articleNum, groupName, year, month, sql.ErrNoRows)
+			return &article, nil
 		}
+		// If still not found, then it's a genuine ErrNoRows for this group/articleNum combination.
+		return nil, fmt.Errorf("article num %d in group '%s' (year %d, month %d) not found: %w", articleNum, groupName, year, month, sql.ErrNoRows)
+	} else { // Other error from the initial query
 		return nil, fmt.Errorf("failed to query article num %d in group '%s': %w", articleNum, groupName, err)
 	}
-	article.References = models.ParseReferencesString(article.RawReferences)
-
+	// This part is reached if the first query succeeded.
 	if db.cache != nil {
-		db.cache.Set(cacheKey, &article, db.cacheTTL) // Cache the pointer
+		db.cache.Set(cacheKey, &article, db.cacheTTL)
 		log.Printf("Cached result for GetArticleByDetails: %s", cacheKey)
 	}
 	return &article, nil
@@ -467,8 +477,9 @@ func (db *DB) GetArticleByMessageID(messageIDVal string) (*models.Article, error
 		LIMIT 1`
 
 	var article models.Article
+	var rawMsgID string // To scan h_messageid which includes <>
 	err := db.sqlDB.QueryRow(articleQuery, messageIDVal).Scan(
-		&article.GroupID, &article.ArticleNum, &article.MessageID, &article.Subject,
+		&article.GroupID, &article.ArticleNum, &rawMsgID, &article.Subject,
 		&article.From, &article.Date, &article.Received, &article.ThreadID,
 		&article.ParentNum, &article.RawReferences, &article.Lines, &article.Bytes,
 		&article.GroupName,
@@ -480,6 +491,7 @@ func (db *DB) GetArticleByMessageID(messageIDVal string) (*models.Article, error
 		}
 		return nil, fmt.Errorf("failed to query article by Message-ID '%s': %w", messageIDVal, err)
 	}
+	article.MessageID = strings.Trim(rawMsgID, "<>")
 	article.References = models.ParseReferencesString(article.RawReferences)
 
 	if db.cache != nil {
@@ -522,8 +534,9 @@ func (db *DB) GetThreadMessages(threadID uint32, currentArticleGroupID uint16, c
 	var articles []models.Article
 	for rows.Next() {
 		var article models.Article
+		var rawMsgID string
 		if err := rows.Scan(
-			&article.GroupID, &article.ArticleNum, &article.MessageID, &article.Subject,
+			&article.GroupID, &article.ArticleNum, &rawMsgID, &article.Subject,
 			&article.From, &article.Date, &article.Received, &article.ThreadID,
 			&article.ParentNum, &article.RawReferences, &article.Lines, &article.Bytes,
 			&article.GroupName,
@@ -531,6 +544,7 @@ func (db *DB) GetThreadMessages(threadID uint32, currentArticleGroupID uint16, c
 			log.Printf("Error scanning article row for thread_id %d: %v", threadID, err)
 			continue
 		}
+		article.MessageID = strings.Trim(rawMsgID, "<>")
 		article.References = models.ParseReferencesString(article.RawReferences)
 		articles = append(articles, article)
 	}

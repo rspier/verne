@@ -333,9 +333,14 @@ func (s *Server) handleShowArticle() http.HandlerFunc {
 						} else {
 							displayBody = parsedArt.PreferredBody // Plain text
 						}
+						if parsedArt.IsHTML {
+							displayBody = parsedArt.PreferredBody // Keep as string for now
+						} else {
+							displayBody = parsedArt.PreferredBody // Plain text
+						}
 						isHTML = parsedArt.IsHTML
 						otherPartsExist = parsedArt.OtherPartsExist
-						log.Printf("Article %s: Preferred body is HTML: %v, Other parts: %v", article.MessageID, isHTML, otherPartsExist)
+						log.Printf("Article %s: Preferred body is HTML: %v, Other parts: %v. Sanitized HTML length: %d, Plain text length: %d", article.MessageID, isHTML, otherPartsExist, len(parsedArt.SanitizedHTML), len(parsedArt.TextBody))
 					}
 				}
 			} else {
@@ -343,10 +348,19 @@ func (s *Server) handleShowArticle() http.HandlerFunc {
 				displayBody = "[NNTP client not available to fetch body]"
 			}
 
+			var templateArticleContent interface{}
+			if isHTML {
+				templateArticleContent = htmltemplate.HTML(displayBody)
+			} else {
+				templateArticleContent = displayBody
+			}
+
+			log.Printf("Data for template: IsHTMLContent=%v, Type of ArticleContent=%T", isHTML, templateArticleContent)
+
 			data := map[string]interface{}{
 				"Article":         article,
 				"ThreadMessages":  threadMessages,
-				"ArticleContent":  displayBody,
+				"ArticleContent":  templateArticleContent,
 				"IsHTMLContent":   isHTML,
 				"OtherPartsExist": otherPartsExist,
 			}

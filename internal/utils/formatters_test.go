@@ -56,7 +56,7 @@ func TestObfuscateEmailInFromHeader(t *testing.T) {
 		{
 			name:     "malformed - multiple @",
 			from:     "test@test@example.com",
-			expected: "tes...@test@example.com", // Current behavior obfuscates the first part before first @
+			expected: "tes...@test@example.com", // Corrected: matches current behavior
 		},
 		{
 			name:     "unicode name",
@@ -66,12 +66,37 @@ func TestObfuscateEmailInFromHeader(t *testing.T) {
 		{
 			name:     "empty name, email present (unusual format, ParseAddress fails)",
 			from:     "<> <user@example.com>",
-			expected: "<> <user@example.com>",    // mail.ParseAddress fails, so original is returned by current logic.
+			expected: "<> <user@example.com>",    // mail.ParseAddress fails for this, so original is returned.
 		},
 		{
 			name:     "bare email, no name, no brackets",
 			from:     "plainaddress@example.com",
 			expected: "pla...@example.com",
+		},
+		{
+			name:     "RFC 2047 Q-encoded UTF-8 display name",
+			from:     "=?UTF-8?Q?Smylers=20=C2=A0?= <smylers@example.com>",
+			expected: "Smylers \u00A0", // Decoded: "Smylers " + non-breaking space
+		},
+		{
+			name:     "RFC 2047 B-encoded UTF-8 display name",
+			from:     "=?UTF-8?B?SsOzbGxlcg==?= <smylers@example.com>", // This is Jóller
+			expected: "Jóller", // Corrected expected output
+		},
+		{
+			name:     "RFC 2047 Q-encoded ISO-8859-1 display name",
+			from:     "=?ISO-8859-1?Q?J=F6rg_Smylers?= <smylers@example.com>", // Jörg Smylers
+			expected: "Jörg Smylers", // WordDecoder handles charset if possible
+		},
+		{
+			name:     "RFC 2047 Q-encoded multiple words",
+			from:     "=?UTF-8?Q?First=20Part?= =?UTF-8?Q?=20Second=20Part?= <user@example.com>",
+			expected: "First Part Second Part",
+		},
+		{
+			name:     "RFC 2047 with plain text",
+			from:     "Plain =?UTF-8?Q?Encoded?= Text <user@example.com>",
+			expected: "Plain Encoded Text",
 		},
 	}
 

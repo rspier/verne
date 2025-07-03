@@ -116,7 +116,8 @@ func TestServer_handleShowArticle(t *testing.T) {
 			expectedBodyContains: []string{
 				"Test Subject",
 				"<strong>From:</strong> Test From",
-				`<code>&lt;<a href="/group/test.group/;.msgid=article123@example.com">article123@example.com</a>&gt;</code>`,
+				"<strong>Message-ID:</strong>", // Check for label
+				`<a href="/group/test.group/;.msgid=article123@example.com"><code>article123@example.com</code></a>`, // Check for link and content
 				"No other messages found in this thread.",
 			},
 		},
