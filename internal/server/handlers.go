@@ -7,10 +7,46 @@ import (
 	"log"
 	"net/http"
 	"nntp-web/web/templates" // For template name constants
+	// "net/mail"     // For mail.ParseDate - No longer used after commenting out JWZ date parsing
 	"strconv"      // For strconv.Atoi, strconv.ParseUint
 	"strings"      // For strings.Split, strings.Trim, etc.
 	"time"         // For time.Now, time.Date
+
+	// "nntp-web/internal/models"    // For models.Article - No longer used directly here after commenting out JWZ
+	"nntp-web/internal/mimeparser"   // Added for mimeparser.ParseArticle
+	// threadlib "github.com/gatherstars-com/jwz" // For threading, aliased - Temporarily commented out
 )
+
+/* // Temporarily commented out JWZ adapter due to build issues
+// jwzArticleAdapter adapts models.Article to the threadlib.Message interface.
+type jwzArticleAdapter struct {
+	models.Article // Embed models.Article
+	ParsedDate     time.Time
+}
+
+// MessageID returns the article's Message-ID.
+func (a jwzArticleAdapter) MessageID() string {
+	return a.Article.MessageID
+}
+
+// References returns the article's references.
+func (a jwzArticleAdapter) References() []string {
+	return a.Article.References
+}
+
+// Date returns the parsed article date.
+func (a jwzArticleAdapter) Date() time.Time {
+	return a.ParsedDate
+}
+
+// Subject returns the article's subject.
+func (a jwzArticleAdapter) Subject() string {
+	return a.Article.Subject
+}
+
+// Ensure jwzArticleAdapter implements threadlib.Message (compile-time check)
+var _ threadlib.Message = jwzArticleAdapter{}
+*/
 
 // handleListGroups handles requests to list all newsgroups.
 func (s *Server) handleListGroups() http.HandlerFunc {
@@ -110,10 +146,28 @@ func (s *Server) handleListMessages() http.HandlerFunc {
 			return
 		}
 
-		// Data for template
+		/* // Temporarily commented out JWZ threading logic
+		// Convert models.Article to threadlib.Message for threading
+		jwzMessages := make([]threadlib.Message, len(articles))
+		for i, art := range articles {
+			var articleTime time.Time
+			parsedTime, errTime := mail.ParseDate(art.Date)
+			if errTime != nil {
+				log.Printf("Warning: Could not parse date string '%s' for article '%s': %v. Using zero time for threading.", art.Date, art.MessageID, errTime)
+				articleTime = time.Time{}
+			} else {
+				articleTime = parsedTime
+			}
+			jwzMessages[i] = jwzArticleAdapter{Article: art, ParsedDate: articleTime}
+		}
+		threadedMessages := threadlib.Thread(jwzMessages)
+		*/
+
+		// Data for template (reverting to flat article list for now)
 		data := map[string]interface{}{
 			"GroupName":              groupNameStr,
-			"Articles":               articles,
+			"Articles":               articles, // Passing raw articles for flat list
+			// "ThreadedMessages":       threadedMessages,
 			"CurrentYear":            targetYear,
 			"CurrentMonth":           targetMonth,
 			"SpecificMonthRequested": specificMonthRequested,
@@ -251,22 +305,39 @@ func (s *Server) handleShowArticle() http.HandlerFunc {
 				log.Printf("Error fetching thread messages for article %s (thread %d): %v", article.MessageID, article.ThreadID, err)
 			}
 
-			var articleBody string
-			var bodyErr error
+			var displayBody string
+			var isHTML, otherPartsExist bool
+
 			if s.nntpClient != nil {
-				articleBody, bodyErr = s.nntpClient.FetchArticleBody(article.MessageID, article.GroupName)
-				if bodyErr != nil {
-					log.Printf("Error fetching article body for %s from NNTP: %v", article.MessageID, bodyErr)
+				rawArticleContent, fetchErr := s.nntpClient.FetchRawArticle(article.MessageID, article.GroupName)
+				if fetchErr != nil {
+					log.Printf("Error fetching raw article for %s from NNTP: %v", article.MessageID, fetchErr)
+					displayBody = fmt.Sprintf("[Error fetching article content: %v]", fetchErr)
+				} else {
+					parsedArt, parseErr := mimeparser.ParseArticle(strings.NewReader(rawArticleContent))
+					if parseErr != nil {
+						log.Printf("Error parsing MIME for article %s: %v", article.MessageID, parseErr)
+						displayBody = fmt.Sprintf("[Error parsing article content: %v. Raw content might be shown below if available.]\n\n%s", parseErr, rawArticleContent)
+						// As a fallback, display the raw content if parsing fails badly.
+						// Ensure it's treated as plain text by template.
+					} else {
+						displayBody = parsedArt.PreferredBody
+						isHTML = parsedArt.IsHTML
+						otherPartsExist = parsedArt.OtherPartsExist
+						log.Printf("Article %s: Preferred body is HTML: %v, Other parts: %v", article.MessageID, isHTML, otherPartsExist)
+					}
 				}
 			} else {
 				log.Println("NNTP client not initialized, cannot fetch article body.")
-				articleBody = "[NNTP client not available to fetch body]"
+				displayBody = "[NNTP client not available to fetch body]"
 			}
 
 			data := map[string]interface{}{
-				"Article":        article,
-				"ThreadMessages": threadMessages,
-				"ArticleBody":    articleBody,
+				"Article":         article,
+				"ThreadMessages":  threadMessages,
+				"ArticleContent":  displayBody,     // Renamed from ArticleBody for clarity
+				"IsHTMLContent":   isHTML,          // Flag for template
+				"OtherPartsExist": otherPartsExist, // Flag for template
 			}
 			s.renderTemplate(w, r, templates.ArticleView, data)
 			return

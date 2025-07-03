@@ -6,26 +6,27 @@ It aims to provide a user-friendly interface for reading articles and navigating
 ## Features (Implemented)
 
 *   List all available newsgroups (`/group/`).
-*   View messages within a newsgroup, paginated by month.
-    *   Current month: `/group/{groupname}/`
-    *   Specific month: `/group/{groupname}/{year}/{month}.html`
-    *   Navigation links for previous/next month.
-*   Display individual articles (`/group/{groupname}/{year}/{month}/msg{id}.html`).
-    *   Prominent display of Subject, From, Date, Message-ID.
-    *   Placeholder for article body (to be fetched from NNTP server).
-*   Show other messages in the same thread at the bottom of an article page.
-*   Redirects for canonical article URLs:
-    *   Lookup by Message-ID: `/group/{groupname}/;.msgid={messageid}` redirects to the canonical article path.
-    *   If an article is accessed with an incorrect year/month in its path, it redirects to the path with the correct date.
+*   View messages within a newsgroup, paginated by month, with smarter navigation (only links to months with content).
+    *   Default view (`/group/{groupname}/`) shows the latest month with messages.
+    *   Specific month: `/group/{groupname}/{year}/{month}.html`.
+*   Display individual articles (`/group/{groupname}/{year}/{month}/msg{id}.html`):
+    *   Fetches full raw article from NNTP server (basic reconnect logic implemented).
+    *   Parses MIME content, preferring sanitized HTML (via `bluemonday`) over plain text.
+    *   Indicates if other non-text MIME parts exist.
+    *   Displays only Subject, From, Date, and MessageID prominently.
+*   Show other messages in the same thread (flat list) at the bottom of an article page. (Advanced JWZ threading is prepared in models but deferred in display).
+*   Redirects for canonical article URLs (by Message-ID or correct date, with `;.msgid=` as a path parameter).
 
 ## Tech Stack
 
-*   Go (using standard library `html/template`, `net/http`, `net/textproto` for basic NNTP)
+*   Go (using standard library `html/template`, `net/http`, `net/textproto` for basic NNTP, `net/mail`, `mime/multipart` for MIME parsing)
 *   MySQL (for caching/indexing NNTP data, schema based on [Colobus3 SQL](https://github.com/perlorg/cnntp/blob/main/sql/colobus3.sql))
-*   `github.com/google/safehtml` (Note: currently using `html/template` for parsing due to `embed.FS` issues with `safehtml/template v0.1.0`, `safehtml` types would be used for data if needed).
 *   `github.com/go-sql-driver/mysql` for MySQL database connectivity.
 *   `github.com/DATA-DOG/go-sqlmock` for database testing.
+*   `github.com/microcosm-cc/bluemonday` for HTML sanitization.
+*   `github.com/gatherstars-com/jwz` (dependency added; full hierarchical threading display deferred due to build issues with library).
 *   Docker (for containerized deployment)
+*   (Note on `safehtml`: Using `html/template` for parsing; `safehtml` types would be for data if needed).
 
 ## Prerequisites
 

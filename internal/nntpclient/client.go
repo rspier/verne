@@ -97,15 +97,15 @@ func isNetworkError(err error) bool {
 }
 
 
-// FetchArticleBody fetches the body of an article using its Message-ID.
+// FetchRawArticle fetches the raw article content (headers + body) using its Message-ID.
 // It will attempt to reconnect and retry once if a network error is detected.
-func (c *Client) FetchArticleBody(messageID string, groupName string) (string, error) {
-	var body string
+func (c *Client) FetchRawArticle(messageID string, groupName string) (string, error) {
+	var rawArticle string
 	var err error
 
 	for i := 0; i < 2; i++ { // Allow one retry (total 2 attempts)
 		if c.conn == nil {
-			if i > 0 { // Already tried to connect and failed, or was nil initially and connect failed
+			if i > 0 {
 				return "", fmt.Errorf("nntp: not connected after retry attempt")
 			}
 			log.Println("NNTP: Connection is nil, attempting to connect...")
@@ -113,39 +113,34 @@ func (c *Client) FetchArticleBody(messageID string, groupName string) (string, e
 			if err != nil {
 				return "", fmt.Errorf("nntp: initial connect failed: %w", err)
 			}
-			// continue to retry command after successful connect
 		}
 
-		body, err = c.fetchArticleBodyAttempt(messageID, groupName)
+		rawArticle, err = c.fetchRawArticleAttempt(messageID, groupName)
 		if err == nil {
-			return body, nil // Success
+			return rawArticle, nil // Success
 		}
 
-		log.Printf("NNTP: FetchArticleBody attempt %d failed: %v", i+1, err)
+		log.Printf("NNTP: FetchRawArticle attempt %d failed: %v", i+1, err)
 
 		if isNetworkError(err) {
 			log.Println("NNTP: Detected network error, attempting to reconnect...")
-			c.Close() // Close existing (possibly broken) connection
+			c.Close()
 			if connectErr := c.connect(); connectErr != nil {
 				log.Printf("NNTP: Reconnect failed: %v", connectErr)
 				return "", fmt.Errorf("nntp: reconnect failed after network error: %w (original error: %v)", connectErr, err)
 			}
 			log.Println("NNTP: Reconnect successful, retrying command.")
-			// Loop will continue for the retry
 		} else {
-			// Not a network error, so don't retry
 			return "", err
 		}
 	}
-	// If loop finishes, it means both attempts failed. Return the last error.
-	return "", fmt.Errorf("nntp: failed to fetch article body after retry: %w", err)
+	return "", fmt.Errorf("nntp: failed to fetch raw article after retry: %w", err)
 }
 
 
-// fetchArticleBodyAttempt contains the actual logic for fetching an article.
-func (c *Client) fetchArticleBodyAttempt(messageID string, groupName string) (string, error) {
-	// This function assumes c.conn is not nil and established by the caller (FetchArticleBody)
-
+// fetchRawArticleAttempt contains the actual logic for fetching a raw article (headers + body).
+func (c *Client) fetchRawArticleAttempt(messageID string, groupName string) (string, error) {
+	// This function assumes c.conn is not nil.
 	cleanMessageID := strings.Trim(messageID, "<>")
 
 	// 1. Select the group
@@ -162,9 +157,8 @@ func (c *Client) fetchArticleBodyAttempt(messageID string, groupName string) (st
 	if !strings.HasPrefix(groupResp, "211") {
 		return "", fmt.Errorf("nntp: failed to select group %s: %s", groupName, strings.TrimSpace(groupResp))
 	}
-	// log.Printf("NNTP: Selected group %s: %s", groupName, strings.TrimSpace(groupResp)) // Reduce logging for attempts
 
-	// 2. Fetch article body by Message-ID
+	// 2. Fetch raw article by Message-ID using ARTICLE command
 	cmdID, err = c.conn.Cmd("ARTICLE <%s>", cleanMessageID)
 	if err != nil {
 		return "", fmt.Errorf("nntp: ARTICLE <%s> command failed: %w", cleanMessageID, err)
@@ -177,29 +171,23 @@ func (c *Client) fetchArticleBodyAttempt(messageID string, groupName string) (st
 		return "", fmt.Errorf("nntp: failed to read status for ARTICLE <%s>: %w", cleanMessageID, err)
 	}
 
-	if strings.HasPrefix(statusLine, "430") { // Article not found by server
+	if strings.HasPrefix(statusLine, "430") { // Article not found
 		return "", fmt.Errorf("nntp: article not found with Message-ID <%s> (server response: %s)", cleanMessageID, strings.TrimSpace(statusLine))
 	}
-	if !strings.HasPrefix(statusLine, "220") {
+	if !strings.HasPrefix(statusLine, "220") { // 220 Article follows (headers and body)
 		return "", fmt.Errorf("nntp: unexpected response for ARTICLE <%s>: %s", cleanMessageID, strings.TrimSpace(statusLine))
 	}
 
-	var bodyLines []string
-	for {
-		line, err := c.reader.ReadString('\n')
-		if err != nil {
-			return "", fmt.Errorf("nntp: error reading article body line: %w", err)
-		}
-		if line == ".\r\n" || line == ".\n" {
-			break
-		}
-		if strings.HasPrefix(line, "..") {
-			line = line[1:]
-		}
-		bodyLines = append(bodyLines, line)
+	// Read the rest of the article (headers and body) until the terminating dot.
+	// Use c.conn.Reader (the textproto.Reader part of Conn) for ReadDotBytes.
+	rawArticleBytes, err := c.conn.Reader.ReadDotBytes()
+	if err != nil {
+		return "", fmt.Errorf("nntp: error reading raw article content: %w", err)
 	}
 
-	return strings.Join(bodyLines, ""), nil
+	// The statusLine is part of the server's response but not part of the raw article itself.
+	// The rawArticleBytes contains headers and body.
+	return string(rawArticleBytes), nil
 }
 
 

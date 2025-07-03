@@ -120,13 +120,14 @@ func (db *DB) GetMessagesForGroupMonth(groupName string, year int, month int) ([
 		if err := rows.Scan(
 			&article.GroupID, &article.ArticleNum, &article.MessageID, &article.Subject,
 			&article.From, &article.Date, &article.Received, &article.ThreadID,
-			&article.ParentNum, &article.References, &article.Lines, &article.Bytes,
+			&article.ParentNum, &article.RawReferences, &article.Lines, &article.Bytes,
 		); err != nil {
 			log.Printf("Error scanning article row for group '%s': %v", groupName, err)
 			// Decide on error handling: skip row or return error
 			// return nil, fmt.Errorf("failed to scan article row: %w", err)
 			continue // Skip problematic row
 		}
+		article.References = models.ParseReferencesString(article.RawReferences)
 		articles = append(articles, article)
 	}
 
@@ -281,7 +282,7 @@ func (db *DB) GetArticleByDetails(groupName string, year int, month int, article
 	err = db.sqlDB.QueryRow(articleQuery, groupID, articleNum, year, month).Scan(
 		&article.GroupID, &article.ArticleNum, &article.MessageID, &article.Subject,
 		&article.From, &article.Date, &article.Received, &article.ThreadID,
-		&article.ParentNum, &article.References, &article.Lines, &article.Bytes,
+		&article.ParentNum, &article.RawReferences, &article.Lines, &article.Bytes,
 	)
 
 	if err != nil {
@@ -298,10 +299,10 @@ func (db *DB) GetArticleByDetails(groupName string, year int, month int, article
 			errRelaxed := db.sqlDB.QueryRow(relaxedArticleQuery, groupID, articleNum).Scan(
 				&relaxedArticle.GroupID, &relaxedArticle.ArticleNum, &relaxedArticle.MessageID, &relaxedArticle.Subject,
 				&relaxedArticle.From, &relaxedArticle.Date, &relaxedArticle.Received, &relaxedArticle.ThreadID,
-				&relaxedArticle.ParentNum, &relaxedArticle.References, &relaxedArticle.Lines, &relaxedArticle.Bytes,
+				&relaxedArticle.ParentNum, &relaxedArticle.RawReferences, &relaxedArticle.Lines, &relaxedArticle.Bytes,
 			)
 			if errRelaxed == nil {
-				// Article found, but with different date. Return this one for the handler to decide on redirect.
+				relaxedArticle.References = models.ParseReferencesString(relaxedArticle.RawReferences)
 				return &relaxedArticle, nil
 			}
 			// If still not found, then it's a genuine ErrNoRows for this group/articleNum combination.
@@ -309,6 +310,7 @@ func (db *DB) GetArticleByDetails(groupName string, year int, month int, article
 		}
 		return nil, fmt.Errorf("failed to query article num %d in group '%s': %w", articleNum, groupName, err)
 	}
+	article.References = models.ParseReferencesString(article.RawReferences)
 	return &article, nil
 }
 
@@ -329,7 +331,7 @@ func (db *DB) GetArticleByMessageID(messageIDVal string) (*models.Article, error
 	err := db.sqlDB.QueryRow(articleQuery, messageIDVal).Scan(
 		&article.GroupID, &article.ArticleNum, &article.MessageID, &article.Subject,
 		&article.From, &article.Date, &article.Received, &article.ThreadID,
-		&article.ParentNum, &article.References, &article.Lines, &article.Bytes,
+		&article.ParentNum, &article.RawReferences, &article.Lines, &article.Bytes,
 		&article.GroupName,
 	)
 
@@ -339,6 +341,7 @@ func (db *DB) GetArticleByMessageID(messageIDVal string) (*models.Article, error
 		}
 		return nil, fmt.Errorf("failed to query article by Message-ID '%s': %w", messageIDVal, err)
 	}
+	article.References = models.ParseReferencesString(article.RawReferences)
 	return &article, nil
 }
 
@@ -367,12 +370,13 @@ func (db *DB) GetThreadMessages(threadID uint32, currentArticleGroupID uint16, c
 		if err := rows.Scan(
 			&article.GroupID, &article.ArticleNum, &article.MessageID, &article.Subject,
 			&article.From, &article.Date, &article.Received, &article.ThreadID,
-			&article.ParentNum, &article.References, &article.Lines, &article.Bytes,
+			&article.ParentNum, &article.RawReferences, &article.Lines, &article.Bytes,
 			&article.GroupName,
 		); err != nil {
 			log.Printf("Error scanning article row for thread_id %d: %v", threadID, err)
 			continue
 		}
+		article.References = models.ParseReferencesString(article.RawReferences)
 		articles = append(articles, article)
 	}
 

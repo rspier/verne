@@ -22,7 +22,8 @@ type Article struct {
 	Received    time.Time `json:"received"`    // Corresponds to articles.received (when processed by indexer)
 	ThreadID    uint32    `json:"thread_id"`   // Corresponds to articles.thread_id
 	ParentNum   uint32    `json:"parent_num"`  // Corresponds to articles.parent (parent's articles.id in the same group)
-	References  string    `json:"references"`  // Corresponds to articles.h_references
+	References  []string  `json:"references"`  // Parsed from articles.h_references
+	RawReferences string  `json:"-"`           // To hold the raw string from DB for parsing
 	Lines       uint32    `json:"lines"`       // Corresponds to articles.h_lines
 	Bytes       uint32    `json:"bytes"`       // Corresponds to articles.h_bytes
 

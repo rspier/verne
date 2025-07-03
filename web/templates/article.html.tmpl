@@ -61,12 +61,19 @@
             </div>
 
             <div class="article-body">
-                {{if .ArticleBody}}
-                    <pre>{{.ArticleBody}}</pre> {{/* Using <pre> for plain text body for now */}}
+                {{if .IsHTMLContent}}
+                    {{.ArticleContent}}  {{/* This is pre-sanitized HTML */}}
                 {{else}}
-                    <p><em>Article body is not stored in the database. It would be fetched from the NNTP server here.</em></p>
+                    <pre>{{.ArticleContent}}</pre> {{/* Plain text content */}}
+                {{end}}
+                {{if not .ArticleContent}}
+                     <p><em>No displayable message body found or an error occurred fetching content.</em></p>
                 {{end}}
             </div>
+
+            {{if .OtherPartsExist}}
+            <p style="font-style: italic; margin-top: 15px; font-size: 0.9em;">Note: This article may contain other non-text parts (e.g., attachments) which are not displayed.</p>
+            {{end}}
 
             {{if .ThreadMessages}}
             <div class="thread-section">
