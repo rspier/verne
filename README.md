@@ -56,14 +56,16 @@ It aims to provide a user-friendly interface for reading articles and navigating
 5.  **Access the application:** Open your web browser and go to `http://localhost:8080/group/` (or your configured server port).
 
 ### Command-line Flags
-*   `-db-host`: Database host (default: `localhost`)
-*   `-db-port`: Database port (default: `3306`)
-*   `-db-user`: Database user (default: `user`)
-*   `-db-pass`: Database password (default: `password`)
-*   `-db-name`: Database name (default: `nntp_cache`)
-*   `-server-port`: HTTP server port (default: `8080`)
-*   `-nntp-server`: Backend NNTP server address (host:port) (default: `news.example.com:119`) - Used by the internal NNTP client to fetch article bodies.
-*   `-cache-ttl`: Default cache TTL in seconds for database query results (default: `300`).
+Flags can also be set via environment variables (e.g., `-db-host` can be set by `DB_HOST`). Command-line flags take precedence.
+
+*   `-db-host`: Database host (env: `DB_HOST`, default: `localhost`)
+*   `-db-port`: Database port (env: `DB_PORT`, default: `3306`)
+*   `-db-user`: Database user (env: `DB_USER`, default: `user`)
+*   `-db-pass`: Database password (env: `DB_PASS`, default: `password`)
+*   `-db-name`: Database name (env: `DB_NAME`, default: `nntp_cache`)
+*   `-server-port`: HTTP server port (env: `SERVER_PORT`, default: `8080`)
+*   `-nntp-server`: Backend NNTP server address (host:port) (env: `NNTP_SERVER`, default: `news.example.com:119`) - Used by the internal NNTP client to fetch article bodies.
+*   `-cache-ttl`: Default cache TTL in seconds for database query results (env: `CACHE_TTL`, default: `300`).
 ```
 
 ## Docker Build and Run

@@ -1,10 +1,11 @@
 package config
 
 import (
-	"flag" // Standard library flag
 	"fmt"
-	"os"
-	"strconv"
+	// "os" // No longer needed for Getenv if jnovack/flag handles env vars automatically
+	// "strconv" // No longer needed for Atoi if jnovack/flag handles env vars automatically
+
+	flag "github.com/jnovack/flag"
 )
 
 // Config holds the application configuration.
@@ -20,66 +21,37 @@ type Config struct {
 }
 
 // Load parses command-line flags and environment variables to populate the Config struct.
-// Command-line flags take precedence over environment variables.
+// github.com/jnovack/flag is expected to handle environment variables automatically.
+// For a flag like -db-host, it should check for an environment variable DB_HOST.
 func Load() (*Config, error) {
 	cfg := &Config{}
 
-	// Define flags using standard library
-	flag.StringVar(&cfg.DBHost, "db-host", "localhost", "Database host")
-	flag.IntVar(&cfg.DBPort, "db-port", 3306, "Database port")
-	flag.StringVar(&cfg.DBUser, "db-user", "user", "Database user")
-	flag.StringVar(&cfg.DBPass, "db-pass", "password", "Database password")
-	flag.StringVar(&cfg.DBName, "db-name", "nntp_cache", "Database name")
-	flag.IntVar(&cfg.ServerPort, "server-port", 8080, "HTTP server port")
-	flag.StringVar(&cfg.NNTPServer, "nntp-server", "news.example.com:119", "NNTP server address (host:port)")
-	flag.IntVar(&cfg.CacheTTLSeconds, "cache-ttl", 300, "Default cache TTL in seconds (e.g., 300 for 5 minutes)")
+	// Define flags using the standard signature. jnovack/flag will handle env var lookup.
+	// These return pointers, so we'll dereference them.
+	dbHost := flag.String("db-host", "localhost", "Database host (env: DB_HOST)")
+	dbPort := flag.Int("db-port", 3306, "Database port (env: DB_PORT)")
+	dbUser := flag.String("db-user", "user", "Database user (env: DB_USER)")
+	dbPass := flag.String("db-pass", "password", "Database password (env: DB_PASS)")
+	dbName := flag.String("db-name", "nntp_cache", "Database name (env: DB_NAME)")
+	serverPort := flag.Int("server-port", 8080, "HTTP server port (env: SERVER_PORT)")
+	nntpServer := flag.String("nntp-server", "news.example.com:119", "NNTP server address (host:port) (env: NNTP_SERVER)")
+	cacheTTLSeconds := flag.Int("cache-ttl", 300, "Default cache TTL in seconds (e.g., 300 for 5 minutes) (env: CACHE_TTL)")
 
-	// Environment variable overrides
-	if host := os.Getenv("NNTPWEB_DB_HOST"); host != "" {
-		cfg.DBHost = host
-	}
-	if portStr := os.Getenv("NNTPWEB_DB_PORT"); portStr != "" {
-		if port, err := strconv.Atoi(portStr); err == nil {
-			cfg.DBPort = port
-		} else {
-			return nil, fmt.Errorf("invalid NNTPWEB_DB_PORT: %w", err)
-		}
-	}
-	if user := os.Getenv("NNTPWEB_DB_USER"); user != "" {
-		cfg.DBUser = user
-	}
-	if pass := os.Getenv("NNTPWEB_DB_PASS"); pass != "" {
-		cfg.DBPass = pass
-	}
-	if name := os.Getenv("NNTPWEB_DB_NAME"); name != "" {
-		cfg.DBName = name
-	}
-	if portStr := os.Getenv("NNTPWEB_SERVER_PORT"); portStr != "" {
-		if port, err := strconv.Atoi(portStr); err == nil {
-			cfg.ServerPort = port
-		} else {
-			return nil, fmt.Errorf("invalid NNTPWEB_SERVER_PORT: %w", err)
-		}
-	}
-	if nntpServer := os.Getenv("NNTPWEB_NNTP_SERVER"); nntpServer != "" {
-		cfg.NNTPServer = nntpServer
-	}
-	if ttlStr := os.Getenv("NNTPWEB_CACHE_TTL_SECONDS"); ttlStr != "" {
-		if ttl, err := strconv.Atoi(ttlStr); err == nil {
-			cfg.CacheTTLSeconds = ttl
-		} else {
-			return nil, fmt.Errorf("invalid NNTPWEB_CACHE_TTL_SECONDS: %w", err)
-		}
-	}
+	flag.Parse()
 
-	// Parse flags after setting defaults and checking environment variables
-	if !flag.Parsed() {
-		flag.Parse()
-	}
+	// Assign parsed values
+	cfg.DBHost = *dbHost
+	cfg.DBPort = *dbPort
+	cfg.DBUser = *dbUser
+	cfg.DBPass = *dbPass
+	cfg.DBName = *dbName
+	cfg.ServerPort = *serverPort
+	cfg.NNTPServer = *nntpServer
+	cfg.CacheTTLSeconds = *cacheTTLSeconds
 
 	// Basic validation
 	if cfg.NNTPServer == "" {
-		return nil, fmt.Errorf("nntp-server address is required")
+		return nil, fmt.Errorf("nntp-server address is required (set via -nntp-server flag or NNTP_SERVER env var)")
 	}
 	if cfg.CacheTTLSeconds < 0 {
 		return nil, fmt.Errorf("cache-ttl must be non-negative")
