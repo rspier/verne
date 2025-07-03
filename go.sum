@@ -25,6 +25,8 @@ github.com/jaytaylor/html2text v0.0.0-20211105163654-bc68cce691ba h1:QFQpJdgbON7
 github.com/jaytaylor/html2text v0.0.0-20211105163654-bc68cce691ba/go.mod h1:CVKlgaMiht+LXvHG173ujK6JUhZXKb2u/BQtjPDIvyk=
 github.com/jhillyerd/enmime v0.11.0 h1:5EOSLh7l3eMODznfMCKVGQY74Qb95Yfuet6CYgquLfM=
 github.com/jhillyerd/enmime v0.11.0/go.mod h1:nw2aJ34YXWklLze+qEESgP+KNhU3fMQuiFsD/4soh3Q=
+github.com/jnovack/flag v1.24.2 h1:URE1phX5b2QYS7MszH6vprwSa/Xvj1oH6RR/WAutkDo=
+github.com/jnovack/flag v1.24.2/go.mod h1:jHKr0Bh5ikRe2VQPUb/djXZYUAvhqR3KbbRo8XURJlU=
 github.com/kisielk/sqlstruct v0.0.0-20201105191214-5f3e10d3ab46/go.mod h1:yyMNCyc/Ib3bDTKd379tNMpB/7/H5TjM2Y9QJ5THLbE=
 github.com/lucasb-eyer/go-colorful v1.2.0/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
 github.com/mattn/go-runewidth v0.0.9/go.mod h1:H031xJmbD/WCDINGzjvQ9THkh0rPKHF+m2gUSrubnMI=

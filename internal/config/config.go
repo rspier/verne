@@ -1,7 +1,7 @@
 package config
 
 import (
-	"flag"
+	"flag" // Standard library flag
 	"fmt"
 	"os"
 	"strconv"
@@ -9,9 +9,9 @@ import (
 
 // Config holds the application configuration.
 type Config struct {
-	DBHost     string
-	DBPort     int
-	DBUser     string
+	DBHost          string
+	DBPort          int
+	DBUser          string
 	DBPass          string
 	DBName          string
 	ServerPort      int
@@ -24,7 +24,7 @@ type Config struct {
 func Load() (*Config, error) {
 	cfg := &Config{}
 
-	// Define flags
+	// Define flags using standard library
 	flag.StringVar(&cfg.DBHost, "db-host", "localhost", "Database host")
 	flag.IntVar(&cfg.DBPort, "db-port", 3306, "Database port")
 	flag.StringVar(&cfg.DBUser, "db-user", "user", "Database user")
@@ -34,8 +34,7 @@ func Load() (*Config, error) {
 	flag.StringVar(&cfg.NNTPServer, "nntp-server", "news.example.com:119", "NNTP server address (host:port)")
 	flag.IntVar(&cfg.CacheTTLSeconds, "cache-ttl", 300, "Default cache TTL in seconds (e.g., 300 for 5 minutes)")
 
-	// Environment variable overrides (optional, but good practice)
-	// Example: NNT WEB_DB_HOST=myhost
+	// Environment variable overrides
 	if host := os.Getenv("NNTPWEB_DB_HOST"); host != "" {
 		cfg.DBHost = host
 	}
@@ -74,8 +73,6 @@ func Load() (*Config, error) {
 	}
 
 	// Parse flags after setting defaults and checking environment variables
-	// This allows flags to override environment variables if both are set.
-	// To ensure flags are parsed correctly when tests are run, we need to check if they are already parsed.
 	if !flag.Parsed() {
 		flag.Parse()
 	}
@@ -84,7 +81,9 @@ func Load() (*Config, error) {
 	if cfg.NNTPServer == "" {
 		return nil, fmt.Errorf("nntp-server address is required")
 	}
-	// Could add more validation here (e.g. check host:port format for NNTPServer)
+	if cfg.CacheTTLSeconds < 0 {
+		return nil, fmt.Errorf("cache-ttl must be non-negative")
+	}
 
 	return cfg, nil
 }

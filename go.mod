@@ -13,5 +13,6 @@ require (
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
+	github.com/jnovack/flag v1.24.2 // indirect
 	golang.org/x/net v0.26.0 // indirect
 )
