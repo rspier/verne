@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/mail"
 	// "net/url" // No longer needed
+	"sort" // For sorting thread lists
 	"strconv"
 	"strings"
 	"time"
@@ -171,6 +172,35 @@ func (s *Server) handleListMessages() http.HandlerFunc {
 				// If jwz outputs thread roots oldest-first, this will result in oldest-first display.
 				// If jwz outputs thread roots newest-first, this will be correct.
 				// If order is still wrong, a manual sort of rootDisplayMessages by date will be needed here.
+
+				// Implement stable sort: newest threads first.
+				if len(rootDisplayMessages) > 1 {
+					sort.SliceStable(rootDisplayMessages, func(i, j int) bool {
+						adapterI, okI := rootDisplayMessages[i].Message.(*jwzArticleAdapter)
+						adapterJ, okJ := rootDisplayMessages[j].Message.(*jwzArticleAdapter)
+
+						// If type assertion fails, fallback to a stable sort based on MessageID only,
+						// or handle as an error. For now, non-adapters sort consistently but arbitrarily first.
+						if !okI || !okJ {
+							// This case implies that DisplayThreadItem.Message is not always *jwzArticleAdapter
+							// which would be unexpected if buildDisplayTree only populates with non-dummy adapters.
+							// Fallback to sorting by MessageID to maintain stability.
+							// Or, if this is truly an error state, log it.
+							// log.Printf("Warning: Unexpected type in Message field during sort: %T, %T", rootDisplayMessages[i].Message, rootDisplayMessages[j].Message)
+							return rootDisplayMessages[i].Message.MessageThreadID() < rootDisplayMessages[j].Message.MessageThreadID()
+						}
+
+						dateI := adapterI.GetDate()
+						dateJ := adapterJ.GetDate()
+
+						if !dateI.Equal(dateJ) {
+							return dateI.After(dateJ) // Newest first
+						}
+
+						// Secondary sort: MessageID of root message, ascending (for stability)
+						return adapterI.MessageThreadID() < adapterJ.MessageThreadID()
+					})
+				}
 			}
 		}
 
