@@ -56,9 +56,10 @@
                 {{/* .Message is a *jwzArticleAdapter */}}
                 {{ $adapter := .Message }}
                 {{ $article := $adapter.Article }} {{/* Access the named 'Article' field of the adapter */}}
+                {{ $receivedUTC := $article.Received.UTC }}
                 <li class="message-item">
                     <div class="message-subject">
-                        <a href="/group/{{$article.GroupName}}/{{$article.Received.Year}}/{{printf "%02d" $article.Received.Month}}/msg{{$article.ArticleNum}}.html">{{$article.Subject}}</a>
+                        <a href="/group/{{$article.GroupName}}/{{$receivedUTC.Year}}/{{printf "%02d" $receivedUTC.Month}}/msg{{$article.ArticleNum}}.html">{{$article.Subject}}</a>
                     </div>
                     <div class="message-meta">
                         From: <span class="message-from">{{$article.DisplayFrom}}</span> |

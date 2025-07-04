@@ -20,7 +20,7 @@
         .thread-section h2 { font-size: 1.4em; color: #333; margin-bottom: 10px; }
         .thread-list { list-style-type: none; padding: 0; }
         .thread-item { background-color: #f9f9f9; margin-bottom: 8px; padding: 10px; border-radius: 4px; border: 1px solid #eee; }
-        .thread-item-subject a { font-weight: bold; }
+        .thread-item-subject a { /* font-weight: bold; removed */ }
         .thread-item-meta { font-size: 0.85em; color: #666; margin-top: 4px; }
         .thread-list-nested { list-style-type: none; padding-left: 20px; /* Indentation for nested threads */ }
         .error-message { color: red; font-weight: bold; }
@@ -63,8 +63,9 @@
             <div class="breadcrumb">
                 <a href="/group/">All Groups</a> &gt;
                 <a href="/group/{{.Article.GroupName}}/">{{.Article.GroupName}}</a> &gt;
-                <a href="/group/{{.Article.GroupName}}/{{.Article.Received.Year}}/{{printf "%02d" .Article.Received.Month}}.html">
-                    {{.Article.Received.Year}}-{{printf "%02d" .Article.Received.Month}}
+                {{ $receivedUTC := .Article.Received.UTC }}
+                <a href="/group/{{.Article.GroupName}}/{{$receivedUTC.Year}}/{{printf "%02d" $receivedUTC.Month}}.html">
+                    {{$receivedUTC.Year}}-{{printf "%02d" $receivedUTC.Month}}
                 </a> &gt;
                 Article
             </div>
@@ -112,7 +113,8 @@
                 <p>No other messages found in this thread.</p>
             </div>
             {{end}}
-            <p style="margin-top:30px;"><a href="/group/{{.Article.GroupName}}/{{.Article.Received.Year}}/{{printf "%02d" .Article.Received.Month}}.html">Back to Message List</a></p>
+            {{ $articleReceivedUTC := .Article.Received.UTC }}
+            <p style="margin-top:30px;"><a href="/group/{{.Article.GroupName}}/{{$articleReceivedUTC.Year}}/{{printf "%02d" $articleReceivedUTC.Month}}.html">Back to Message List</a></p>
         {{else}}
             <p>Article not found.</p>
             <p><a href="/group/">Return to All Groups</a></p>

@@ -149,10 +149,12 @@ func (s *Server) handleListMessages() http.HandlerFunc {
 			if dateParseErr != nil {
 				log.Printf("Warning: Could not parse date string '%s' for article %s (ID: %d) for JWZ: %v. Using zero time.", article.Date, article.MessageID, article.ArticleNum, dateParseErr)
 				parsedDate = time.Time{}
+			} else {
+				parsedDate = parsedDate.UTC() // Normalize to UTC
 			}
 			threadables = append(threadables, &jwzArticleAdapter{
 				Article:    article,
-				ParsedDate: parsedDate,
+				ParsedDate: parsedDate, // Now in UTC
 			})
 		}
 
@@ -368,10 +370,12 @@ func (s *Server) handleShowArticle() http.HandlerFunc {
 			if dateParseErr != nil {
 				log.Printf("Warning: Could not parse date string '%s' for article %s (ID: %d) in thread view: %v. Using zero time.", msg.Date, msg.MessageID, msg.ArticleNum, dateParseErr)
 				parsedDate = time.Time{}
+			} else {
+				parsedDate = parsedDate.UTC() // Normalize to UTC
 			}
 			articleThreadables = append(articleThreadables, &jwzArticleAdapter{
 				Article:    msg,
-				ParsedDate: parsedDate,
+				ParsedDate: parsedDate, // Now in UTC
 			})
 		}
 
