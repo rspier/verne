@@ -93,8 +93,8 @@ func TestServer_handleShowArticle(t *testing.T) {
 	articleDetailsQueryRgx := regexp.QuoteMeta("SELECT group_id, id, h_messageid, h_subject, h_from, h_date, received, thread_id, parent, h_references, h_lines, h_bytes FROM articles WHERE group_id = ? AND id = ? AND YEAR(received) = ? AND MONTH(received) = ? LIMIT 1")
 	relaxedArticleDetailsQueryRgx := regexp.QuoteMeta("SELECT group_id, id, h_messageid, h_subject, h_from, h_date, received, thread_id, parent, h_references, h_lines, h_bytes FROM articles WHERE group_id = ? AND id = ? LIMIT 1")
 	articleByMsgIDQueryRgx := regexp.QuoteMeta("SELECT a.group_id, a.id, a.h_messageid, a.h_subject, a.h_from, a.h_date, a.received, a.thread_id, a.parent, a.h_references, a.h_lines, a.h_bytes, g.name as group_name FROM articles a JOIN `groups` g ON a.group_id = g.id WHERE a.h_messageid = ? LIMIT 1")
-	// Updated threadMessagesQueryRgx to reflect that it now fetches all messages for the threadID
-	threadMessagesQueryRgx := regexp.QuoteMeta("SELECT a.group_id, a.id, a.h_messageid, a.h_subject, a.h_from, a.h_date, a.received, a.thread_id, a.parent, a.h_references, a.h_lines, a.h_bytes, g.name as group_name FROM articles a JOIN `groups` g ON a.group_id = g.id WHERE a.thread_id = ? ORDER BY a.received ASC, a.id ASC")
+	// Updated threadMessagesQueryRgx to also filter by group_id
+	threadMessagesQueryRgx := regexp.QuoteMeta("SELECT a.group_id, a.id, a.h_messageid, a.h_subject, a.h_from, a.h_date, a.received, a.thread_id, a.parent, a.h_references, a.h_lines, a.h_bytes, g.name as group_name FROM articles a JOIN `groups` g ON a.group_id = g.id WHERE a.thread_id = ? AND a.group_id = ? ORDER BY a.received ASC, a.id ASC")
 
 	tests := []struct {
 		name                 string
@@ -113,9 +113,9 @@ func TestServer_handleShowArticle(t *testing.T) {
 				dbMock.ExpectQuery(articleDetailsQueryRgx).WithArgs(groupID, articleNum, year, month).
 					WillReturnRows(sqlmock.NewRows(articleColsNoGroup).
 						AddRow(groupID, articleNum, msgID, "Test Subject", "Test From", mockArticleDateStr, sampleReceived, threadID, 0, "", 10, 100))
-				// Updated WithArgs to only pass threadID for the modified GetThreadMessages query
-				dbMock.ExpectQuery(threadMessagesQueryRgx).WithArgs(threadID).
-					WillReturnRows(sqlmock.NewRows(articleColsWithGroup)) // This mock returns no actual thread messages.
+				// Expect query for thread messages to use threadID and groupID
+				dbMock.ExpectQuery(threadMessagesQueryRgx).WithArgs(threadID, groupID).
+					WillReturnRows(sqlmock.NewRows(articleColsWithGroup)) // Mock returns no actual "other" thread messages for this test.
 			},
 			setupNntpMockFn: func(nntpMock *MockNNTPClient) {
 				nntpMock.On("FetchRawArticle", groupName, articleNum).Return([]byte("Article: Test Subject\n\nBody."), nil).Once()

@@ -439,6 +439,7 @@ func TestDB_GetThreadMessages(t *testing.T) {
 	defer mockDB.Close()
 
 	threadIDToTest := uint32(789) // Test with a specific thread ID
+	groupIDToTest := uint16(1)    // Define a groupID for testing
 	sampleReceived1 := time.Date(2024, 1, 10, 10, 0, 0, 0, time.UTC)
 	sampleReceived2 := time.Date(2024, 1, 10, 11, 0, 0, 0, time.UTC)
 	cols := []string{"group_id", "id", "h_messageid", "h_subject", "h_from", "h_date", "received", "thread_id", "parent", "h_references", "h_lines", "h_bytes", "group_name"}
@@ -449,39 +450,42 @@ func TestDB_GetThreadMessages(t *testing.T) {
 		       g.name as group_name
 		FROM articles a
 		JOIN ` + "`groups` g ON a.group_id = g.id" + `
-		WHERE a.thread_id = ?
+		WHERE a.thread_id = ? AND a.group_id = ?
 		ORDER BY a.received ASC, a.id ASC`)
 
 	tests := []struct {
 		name                string
 		threadID            uint32
+		groupID             uint16 // Added groupID to test struct
 		setupMock           func(mock sqlmock.Sqlmock)
 		expectedArticles    []models.Article
 		expectErr           bool
 		expectErrMsg        string
 	}{
 		{
-			name: "success - all messages in thread returned",
+			name: "success - all messages in thread returned for specific group",
 			threadID: threadIDToTest,
+			groupID: groupIDToTest,
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows(cols).
-					AddRow(1, 101, "msg101@host", "Original Subj", "User0", "Date0", sampleReceived1.Add(-time.Hour), threadIDToTest, 0, "", 4, 40, "group1"). // The "current" article
-					AddRow(1, 102, "msg102@host", "Re: Subj", "UserA", "DateA", sampleReceived1, threadIDToTest, 101, "<refA>", 5, 50, "group1").
-					AddRow(1, 103, "msg103@host", "Re: Re: Subj", "UserB", "DateB", sampleReceived2, threadIDToTest, 102, "<refB1> <refB2>", 6, 60, "group1")
-				mock.ExpectQuery(query).WithArgs(threadIDToTest).WillReturnRows(rows)
+					AddRow(groupIDToTest, 101, "msg101@host", "Original Subj", "User0", "Date0", sampleReceived1.Add(-time.Hour), threadIDToTest, 0, "", 4, 40, "group1").
+					AddRow(groupIDToTest, 102, "msg102@host", "Re: Subj", "UserA", "DateA", sampleReceived1, threadIDToTest, 101, "<refA>", 5, 50, "group1").
+					AddRow(groupIDToTest, 103, "msg103@host", "Re: Re: Subj", "UserB", "DateB", sampleReceived2, threadIDToTest, 102, "<refB1> <refB2>", 6, 60, "group1")
+				mock.ExpectQuery(query).WithArgs(threadIDToTest, groupIDToTest).WillReturnRows(rows)
 			},
 			expectedArticles: []models.Article{
-				{GroupID: 1, ArticleNum: 101, MessageID: "msg101@host", Subject: "Original Subj", From: "User0", Date: "Date0", Received: sampleReceived1.Add(-time.Hour), ThreadID: threadIDToTest, ParentNum: 0, RawReferences: "", References: models.ParseReferencesString(""), Lines: 4, Bytes: 40, GroupName: "group1"},
-				{GroupID: 1, ArticleNum: 102, MessageID: "msg102@host", Subject: "Re: Subj", From: "UserA", Date: "DateA", Received: sampleReceived1, ThreadID: threadIDToTest, ParentNum: 101, RawReferences: "<refA>", References: models.ParseReferencesString("<refA>"), Lines: 5, Bytes: 50, GroupName: "group1"},
-				{GroupID: 1, ArticleNum: 103, MessageID: "msg103@host", Subject: "Re: Re: Subj", From: "UserB", Date: "DateB", Received: sampleReceived2, ThreadID: threadIDToTest, ParentNum: 102, RawReferences: "<refB1> <refB2>", References: models.ParseReferencesString("<refB1> <refB2>"), Lines: 6, Bytes: 60, GroupName: "group1"},
+				{GroupID: groupIDToTest, ArticleNum: 101, MessageID: "msg101@host", Subject: "Original Subj", From: "User0", Date: "Date0", Received: sampleReceived1.Add(-time.Hour), ThreadID: threadIDToTest, ParentNum: 0, RawReferences: "", References: models.ParseReferencesString(""), Lines: 4, Bytes: 40, GroupName: "group1"},
+				{GroupID: groupIDToTest, ArticleNum: 102, MessageID: "msg102@host", Subject: "Re: Subj", From: "UserA", Date: "DateA", Received: sampleReceived1, ThreadID: threadIDToTest, ParentNum: 101, RawReferences: "<refA>", References: models.ParseReferencesString("<refA>"), Lines: 5, Bytes: 50, GroupName: "group1"},
+				{GroupID: groupIDToTest, ArticleNum: 103, MessageID: "msg103@host", Subject: "Re: Re: Subj", From: "UserB", Date: "DateB", Received: sampleReceived2, ThreadID: threadIDToTest, ParentNum: 102, RawReferences: "<refB1> <refB2>", References: models.ParseReferencesString("<refB1> <refB2>"), Lines: 6, Bytes: 60, GroupName: "group1"},
 			},
 			expectErr: false,
 		},
 		{
-			name: "success - no messages for threadID (empty result)", // e.g. threadID doesn't exist
-			threadID: uint32(9999), // A different thread ID
+			name: "success - no messages for threadID in specific group",
+			threadID: uint32(9999),
+			groupID: groupIDToTest,
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(query).WithArgs(uint32(9999)).WillReturnRows(sqlmock.NewRows(cols))
+				mock.ExpectQuery(query).WithArgs(uint32(9999), groupIDToTest).WillReturnRows(sqlmock.NewRows(cols))
 			},
 			expectedArticles: []models.Article{},
 			expectErr: false,
@@ -489,11 +493,12 @@ func TestDB_GetThreadMessages(t *testing.T) {
 		{
 			name: "database query error",
 			threadID: threadIDToTest,
+			groupID: groupIDToTest,
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(query).WithArgs(threadIDToTest).WillReturnError(errors.New("thread db fault"))
+				mock.ExpectQuery(query).WithArgs(threadIDToTest, groupIDToTest).WillReturnError(errors.New("thread db fault"))
 			},
 			expectErr: true,
-			expectErrMsg: "failed to query thread messages for thread_id 789", // Updated to match actual threadID
+			expectErrMsg: "failed to query thread messages for thread_id 789",
 		},
 	}
 
@@ -501,7 +506,7 @@ func TestDB_GetThreadMessages(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			db := NewWithSQLDB(mockDB, nil)
 			tt.setupMock(mock)
-			articles, err := db.GetThreadMessages(tt.threadID)
+			articles, err := db.GetThreadMessages(tt.threadID, tt.groupID) // Pass groupID
 
 			if (err != nil) != tt.expectErr {
 				t.Errorf("GetThreadMessages() error = %v, expectErr %v", err, tt.expectErr)

@@ -346,11 +346,11 @@ func (s *Server) handleShowArticle() http.HandlerFunc {
 		isHTML := parsedResult.IsHTML
 		otherPartsExist := parsedResult.OtherPartsExist
 
-		// Fetch all messages in the thread, including the current one.
-		// GetThreadMessages signature changed: no longer needs currentArticleGroupID, currentArticleNum
-		threadMessages, err := s.db.GetThreadMessages(article.ThreadID)
+		// Fetch all messages in the thread, including the current one, scoped to the current group.
+		// GetThreadMessages signature now requires groupID.
+		threadMessages, err := s.db.GetThreadMessages(article.ThreadID, article.GroupID)
 		if err != nil {
-			log.Printf("Error fetching thread messages for article %s/msg%d (threadID %d): %v", article.GroupName, article.ArticleNum, article.ThreadID, err)
+			log.Printf("Error fetching thread messages for article %s/msg%d (threadID %d, groupID %d): %v", article.GroupName, article.ArticleNum, article.ThreadID, article.GroupID, err)
 			threadMessages = []models.Article{}
 		}
 

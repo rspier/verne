@@ -578,18 +578,18 @@ func (db *DB) GetArticleByMessageID(messageIDVal string) (*models.Article, error
 // GetThreadMessages retrieves all messages in the same thread.
 // It includes the article that might be the "current" one if it's part of the thread.
 // Articles are ordered by their received date. It also populates the Article.GroupName field. It uses a cache.
-func (db *DB) GetThreadMessages(threadID uint32) ([]models.Article, error) { // currentArticleGroupID and currentArticleNum removed
-	// Cache key updated to reflect fetching the full thread for a given threadID
-	cacheKey := fmt.Sprintf("threadmsgs:full:%d", threadID)
+func (db *DB) GetThreadMessages(threadID uint32, groupID uint16) ([]models.Article, error) {
+	// Cache key updated to include groupID for more specific caching of full threads per group.
+	cacheKey := fmt.Sprintf("threadmsgs:full:%d:%d", threadID, groupID)
 	if db.cache != nil {
 		if cached, found := db.cache.Get(cacheKey); found {
 			if articles, ok := cached.([]models.Article); ok {
-				log.Printf("Cache hit for GetThreadMessages (full thread): %s", cacheKey)
+				log.Printf("Cache hit for GetThreadMessages (full thread, group %d): %s", groupID, cacheKey)
 				return articles, nil
 			}
 		}
 	}
-	log.Printf("Cache miss for GetThreadMessages (full thread): %s, querying DB", cacheKey)
+	log.Printf("Cache miss for GetThreadMessages (full thread, group %d): %s, querying DB", groupID, cacheKey)
 
 	query := `
 		SELECT a.group_id, a.id, a.h_messageid, a.h_subject, a.h_from, a.h_date,
@@ -597,14 +597,14 @@ func (db *DB) GetThreadMessages(threadID uint32) ([]models.Article, error) { // 
 		       g.name as group_name
 		FROM articles a
 		JOIN ` + "`groups` g ON a.group_id = g.id" + `
-		WHERE a.thread_id = ?
+		WHERE a.thread_id = ? AND a.group_id = ?
 		ORDER BY a.received ASC, a.id ASC` // Order by date, then by article number for tie-breaking
 
 	if db.cfg != nil && db.cfg.LogSQLQueries {
-		log.Printf("DB_QUERY: GetThreadMessages - SQL: %s - Args: [%d]", strings.ReplaceAll(strings.TrimSpace(query), "\n", " "), threadID)
+		log.Printf("DB_QUERY: GetThreadMessages - SQL: %s - Args: [%d, %d]", strings.ReplaceAll(strings.TrimSpace(query), "\n", " "), threadID, groupID)
 	}
 
-	rows, err := db.sqlDB.Query(query, threadID) // currentArticleGroupID and currentArticleNum removed from query parameters
+	rows, err := db.sqlDB.Query(query, threadID, groupID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query thread messages for thread_id %d: %w", threadID, err)
 	}
