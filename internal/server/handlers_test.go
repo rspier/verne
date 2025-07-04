@@ -162,7 +162,8 @@ func TestServer_handleShowArticle(t *testing.T) {
 			}
 			defer mockSqlDb.Close()
 
-			testableDB := database.NewWithSQLDB(mockSqlDb)
+			// Pass nil for config to NewWithSQLDB
+			testableDB := database.NewWithSQLDB(mockSqlDb, nil)
 			nntpMock := new(MockNNTPClient)
 
 			s := newTestServer(t, testableDB, nntpMock)
@@ -238,7 +239,7 @@ func TestServer_RouteGroupRequests(t *testing.T) {
 			}
 			defer mockSqlDb.Close()
 
-			testableDB := database.NewWithSQLDB(mockSqlDb)
+			testableDB := database.NewWithSQLDB(mockSqlDb, nil) // Pass nil for config
 			nntpMock := new(MockNNTPClient)
 			s := newTestServer(t, testableDB, nntpMock)
 
@@ -311,7 +312,7 @@ func TestServer_handleListMessages_SpecificMonth(t *testing.T) {
 			mockSqlDb, dbMock, err := sqlmock.New()
 			if err != nil { t.Fatalf("Failed to create sqlmock: %v", err) }
 			defer mockSqlDb.Close()
-			testableDB := database.NewWithSQLDB(mockSqlDb)
+			testableDB := database.NewWithSQLDB(mockSqlDb, nil) // Pass nil for config
 			nntpMock := new(MockNNTPClient)
 			s := newTestServer(t, testableDB, nntpMock)
 			if tt.setupDbMockFn != nil { tt.setupDbMockFn(dbMock) }
@@ -359,7 +360,7 @@ func TestServer_handleListMessages_JWZThreading(t *testing.T) {
 	mockSqlDb, dbMock, err := sqlmock.New()
 	if err != nil { t.Fatalf("Failed to create sqlmock: %v", err) }
 	defer mockSqlDb.Close()
-	testableDB := database.NewWithSQLDB(mockSqlDb)
+	testableDB := database.NewWithSQLDB(mockSqlDb, nil) // Pass nil for config
 	nntpMock := new(MockNNTPClient)
 	s := newTestServer(t, testableDB, nntpMock)
 
@@ -431,7 +432,7 @@ func TestServer_handleListMessages_DefaultToLatestMonth(t *testing.T) {
 			mockSqlDb, dbMock, err := sqlmock.New()
 			if err != nil { t.Fatalf("Failed to create sqlmock: %v", err) }
 			defer mockSqlDb.Close()
-			testableDB := database.NewWithSQLDB(mockSqlDb)
+			testableDB := database.NewWithSQLDB(mockSqlDb, nil) // Pass nil for config
 			nntpMock := new(MockNNTPClient)
 			s := newTestServer(t, testableDB, nntpMock)
 			if tt.setupDbMockFn != nil { tt.setupDbMockFn(dbMock, tt.latestYear, tt.latestMonth) }

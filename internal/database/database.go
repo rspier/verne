@@ -19,20 +19,21 @@ type DB struct {
 	sqlDB    *sql.DB
 	cache    *cache.Cache
 	cacheTTL time.Duration
+	cfg      *config.Config // Added to hold config for things like LogSQLQueries
 }
 
 // New creates a new DB instance and connects to the database.
-// It also initializes it with the provided cache and TTL.
-func New(cfg *config.Config, appCache *cache.Cache) (*DB, error) {
+// It also initializes it with the provided cache, TTL, and application config.
+func New(appCfg *config.Config, appCache *cache.Cache) (*DB, error) {
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&charset=utf8mb4",
-		cfg.DBUser,
-		cfg.DBPass,
-		cfg.DBHost,
-		cfg.DBPort,
-		cfg.DBName,
+		appCfg.DBUser,
+		appCfg.DBPass,
+		appCfg.DBHost,
+		appCfg.DBPort,
+		appCfg.DBName,
 	)
 
-	log.Printf("Connecting to database: %s@tcp(%s:%d)/%s", cfg.DBUser, cfg.DBHost, cfg.DBPort, cfg.DBName)
+	log.Printf("Connecting to database: %s@tcp(%s:%d)/%s", appCfg.DBUser, appCfg.DBHost, appCfg.DBPort, appCfg.DBName)
 
 	sqlDB, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -53,7 +54,8 @@ func New(cfg *config.Config, appCache *cache.Cache) (*DB, error) {
 	return &DB{
 		sqlDB:    sqlDB,
 		cache:    appCache,
-		cacheTTL: time.Duration(cfg.CacheTTLSeconds) * time.Second,
+		cacheTTL: time.Duration(appCfg.CacheTTLSeconds) * time.Second, // Use appCfg here
+		cfg:      appCfg, // Store the config
 	}, nil
 }
 
@@ -65,12 +67,17 @@ func (db *DB) Close() error {
 	return nil
 }
 
-// NewWithSQLDB is a constructor for testing purposes, allowing injection of a custom *sql.DB.
+// NewWithSQLDB is a constructor for testing purposes, allowing injection of a custom *sql.DB and config.
 // It also initializes a new cache with a default TTL for tests.
-func NewWithSQLDB(sqlDb *sql.DB) *DB {
+func NewWithSQLDB(sqlDb *sql.DB, appCfg *config.Config) *DB {
 	testCache := cache.NewCache()
-	// Use a short, predictable TTL for testing, or make it configurable if needed for specific cache tests.
-	return &DB{sqlDB: sqlDb, cache: testCache, cacheTTL: 1 * time.Minute}
+	var ttl time.Duration
+	if appCfg != nil && appCfg.CacheTTLSeconds > 0 {
+		ttl = time.Duration(appCfg.CacheTTLSeconds) * time.Second
+	} else {
+		ttl = 1 * time.Minute // Default test TTL
+	}
+	return &DB{sqlDB: sqlDb, cache: testCache, cacheTTL: ttl, cfg: appCfg}
 }
 
 // GetAllNewsgroups retrieves all newsgroups from the database, ordered by name.
@@ -592,6 +599,10 @@ func (db *DB) GetThreadMessages(threadID uint32) ([]models.Article, error) { // 
 		JOIN ` + "`groups` g ON a.group_id = g.id" + `
 		WHERE a.thread_id = ?
 		ORDER BY a.received ASC, a.id ASC` // Order by date, then by article number for tie-breaking
+
+	if db.cfg != nil && db.cfg.LogSQLQueries {
+		log.Printf("DB_QUERY: GetThreadMessages - SQL: %s - Args: [%d]", strings.ReplaceAll(strings.TrimSpace(query), "\n", " "), threadID)
+	}
 
 	rows, err := db.sqlDB.Query(query, threadID) // currentArticleGroupID and currentArticleNum removed from query parameters
 	if err != nil {

@@ -61,7 +61,9 @@ func TestDB_GetAllNewsgroups(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db := NewWithSQLDB(mockDB)
+			// Pass nil for config, as these tests don't rely on config-specific behavior like SQL logging.
+			// NewWithSQLDB will use a default TTL if config is nil or CacheTTLSeconds is not positive.
+			db := NewWithSQLDB(mockDB, nil)
 			if tt.mockExpectErr != nil {
 				mock.ExpectQuery(regexp.QuoteMeta(query)).WillReturnError(tt.mockExpectErr)
 			} else {
@@ -181,7 +183,7 @@ func TestDB_GetLatestMessageMonthForGroup(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db := NewWithSQLDB(mockDB) // New DB (and cache) for each sub-test
+			db := NewWithSQLDB(mockDB, nil) // New DB (and cache) for each sub-test, pass nil for config
 			tt.setupMock(mock)
 
 			year, month, found := db.GetLatestMessageMonthForGroup(groupName)
@@ -312,7 +314,7 @@ func TestDB_GetArticleByDetails(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db := NewWithSQLDB(mockDB)
+			db := NewWithSQLDB(mockDB, nil)
 			tt.setupMock(mock)
 			article, err := db.GetArticleByDetails(tt.groupName, tt.year, tt.month, tt.articleNum)
 
@@ -405,7 +407,7 @@ func TestDB_GetArticleByMessageID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db := NewWithSQLDB(mockDB)
+			db := NewWithSQLDB(mockDB, nil)
 			tt.setupMock(mock)
 			article, err := db.GetArticleByMessageID(tt.messageID)
 
@@ -497,7 +499,7 @@ func TestDB_GetThreadMessages(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db := NewWithSQLDB(mockDB)
+			db := NewWithSQLDB(mockDB, nil)
 			tt.setupMock(mock)
 			articles, err := db.GetThreadMessages(tt.threadID)
 
@@ -533,7 +535,7 @@ func TestDB_GetAllNewsgroups_ScanError(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	db := NewWithSQLDB(mockDB)
+	db := NewWithSQLDB(mockDB, nil)
 	query := "SELECT id, name, description FROM `groups` ORDER BY name"
 
 	rows := sqlmock.NewRows([]string{"id", "name", "description"}).
@@ -628,7 +630,7 @@ func TestDB_GetMinMaxMessageMonthsForGroup(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-            db := NewWithSQLDB(mockDB)
+            db := NewWithSQLDB(mockDB, nil)
 			tt.setupMock(mock)
 			minY, minM, maxY, maxM, found, err := db.GetMinMaxMessageMonthsForGroup(groupName)
 
@@ -702,7 +704,7 @@ func TestDB_GetPrevMonthWithMessages(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-            db := NewWithSQLDB(mockDB)
+            db := NewWithSQLDB(mockDB, nil)
 			tt.setupMock(mock)
 			pY, pM, found, err := db.GetPrevMonthWithMessages(groupName, currentYear, currentMonth)
             if (err != nil) != tt.expectErr { t.Errorf("GetPrevMonthWithMessages() error = %v, expectErr %v", err, tt.expectErr); return }
@@ -764,7 +766,7 @@ func TestDB_GetNextMonthWithMessages(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-            db := NewWithSQLDB(mockDB)
+            db := NewWithSQLDB(mockDB, nil)
 			tt.setupMock(mock)
 			nY, nM, found, err := db.GetNextMonthWithMessages(groupName, currentYear, currentMonth)
             if (err != nil) != tt.expectErr { t.Errorf("GetNextMonthWithMessages() error = %v, expectErr %v", err, tt.expectErr); return }
@@ -881,7 +883,7 @@ func TestDB_GetMessagesForGroupMonth(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-            db := NewWithSQLDB(mockDB)
+            db := NewWithSQLDB(mockDB, nil)
 			tt.setupMock(mock)
 			articles, err := db.GetMessagesForGroupMonth(tt.groupName, tt.year, tt.month)
 
