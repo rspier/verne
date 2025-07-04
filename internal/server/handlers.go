@@ -20,31 +20,66 @@ import (
 
 // DisplayThreadItem is used for rendering the threaded message list.
 type DisplayThreadItem struct {
-	Message jwz.Threadable
-	Depth   int
-	Children []*DisplayThreadItem
+	Message                   jwz.Threadable
+	Depth                     int
+	Children                  []*DisplayThreadItem
+	MessagesInSubThreadCount int // New field: count of messages in this item's thread/sub-thread
 }
 
-func buildDisplayTree(rootContainer jwz.Threadable, currentDepth int) []*DisplayThreadItem {
+// jwzArticleAdapter is defined in server.go, this redundant definition is removed.
+
+// The incorrect buildDisplayTree definition has been removed.
+// The correct one below remains.
+
+// buildDisplayTree processes a list of sibling Threadable messages (linked by GetNext)
+// and recursively builds a tree of DisplayThreadItem nodes.
+// It returns the list of DisplayThreadItem nodes created at the current level,
+// and the total count of messages in the subtrees rooted at these nodes.
+func buildDisplayTree(rootContainer jwz.Threadable, currentDepth int) ([]*DisplayThreadItem, int) {
 	var items []*DisplayThreadItem
+	var totalMessagesInSubTree int = 0
 	sibling := rootContainer
+
 	for sibling != nil {
 		if !sibling.IsDummy() {
 			item := &DisplayThreadItem{
 				Message: sibling,
 				Depth:   currentDepth,
+				// MessagesInSubThreadCount will be calculated below
 			}
+
+			messagesInThisBranch := 1 // Count the current message itself
+
 			if child := sibling.GetChild(); child != nil {
-				item.Children = buildDisplayTree(child, currentDepth+1)
+				var childrenItems []*DisplayThreadItem
+				var countFromChildren int
+				// Recursively call buildDisplayTree for children
+				childrenItems, countFromChildren = buildDisplayTree(child, currentDepth+1)
+				item.Children = childrenItems
+				messagesInThisBranch += countFromChildren
 			}
+
+			item.MessagesInSubThreadCount = messagesInThisBranch
 			items = append(items, item)
+			totalMessagesInSubTree += messagesInThisBranch
 		} else {
-			log.Printf("Skipping dummy root item: %s", sibling.MessageThreadID())
+			// If the current sibling is a dummy, we don't create a DisplayThreadItem for it.
+			// However, its children should be processed as if they are at the current depth,
+			// effectively promoting them. The jwz library sometimes produces a dummy root
+			// whose children are the actual top-level threads.
+			log.Printf("Skipping dummy item: %s, processing its children at current depth %d.", sibling.MessageThreadID(), currentDepth)
+			if child := sibling.GetChild(); child != nil {
+				// Process children of the dummy. These children become part of the current list of items.
+				childrenOfDummy, countFromDummyChildren := buildDisplayTree(child, currentDepth) // Children are at the same depth as dummy's original level.
+				items = append(items, childrenOfDummy...) // Add children directly to the current list
+				totalMessagesInSubTree += countFromDummyChildren
+			}
 		}
 		sibling = sibling.GetNext()
 	}
-	return items
+	return items, totalMessagesInSubTree
 }
+
 
 func (s *Server) handleListGroups() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +162,8 @@ func (s *Server) handleListMessages() http.HandlerFunc {
 			if errThread != nil {
 				log.Printf("Error threading messages for group %s: %v", groupName, errThread)
 			} else if rootThreadable != nil {
-				rootDisplayMessages = buildDisplayTree(rootThreadable, 0)
+				// buildDisplayTree now returns (items, totalCount). We only need items here.
+				rootDisplayMessages, _ = buildDisplayTree(rootThreadable, 0)
 			}
 		}
 
@@ -279,6 +315,39 @@ func (s *Server) handleShowArticle() http.HandlerFunc {
 			threadMessages[i].DisplayFrom = utils.ObfuscateEmailInFromHeader(threadMessages[i].From)
 		}
 
+		// Prepare threadables for JWZ processing for the article's thread display
+		var articleThreadables []jwz.Threadable
+		for i := range threadMessages { // These are already "other" messages
+			msg := &threadMessages[i] // Use a pointer to the item in the slice
+			// Ensure DisplayFrom is set for these messages as well
+			// msg.DisplayFrom is already set in the loop above.
+
+			parsedDate, dateParseErr := mail.ParseDate(msg.Date)
+			if dateParseErr != nil {
+				log.Printf("Warning: Could not parse date string '%s' for article %s (ID: %d) in thread view: %v. Using zero time.", msg.Date, msg.MessageID, msg.ArticleNum, dateParseErr)
+				parsedDate = time.Time{}
+			}
+			articleThreadables = append(articleThreadables, &jwzArticleAdapter{
+				Article:    msg,
+				ParsedDate: parsedDate,
+			})
+		}
+
+		var articleThreadTree []*DisplayThreadItem
+		if len(articleThreadables) > 0 {
+			threader := jwz.NewThreader()
+			// Note: jwz.Containerize might be needed if ThreadSlice expects a specific root or if messages are disparate.
+			// For a simple list of messages belonging to the same thread (excluding the current one),
+			// ThreadSlice should be able to form sub-threads.
+			rootThreadable, errThread := threader.ThreadSlice(articleThreadables)
+			if errThread != nil {
+				log.Printf("Error threading messages for article view %s: %v", article.MessageID, errThread)
+			} else if rootThreadable != nil {
+				// Pass depth 0 as these are the roots of the "other messages" display
+				articleThreadTree, _ = buildDisplayTree(rootThreadable, 0) // Ignore the count for this specific tree
+			}
+		}
+
 		var articleContentHTML template.HTML
 		if isHTML {
 			articleContentHTML = template.HTML(parsedContent)
@@ -290,7 +359,7 @@ func (s *Server) handleShowArticle() http.HandlerFunc {
 			"ArticleContentHTML": articleContentHTML,
 			"IsHTMLContent":      isHTML,
 			"OtherPartsExist":    otherPartsExist,
-			"ThreadMessages":     threadMessages,
+			"ArticleThreadTree":  articleThreadTree, // New field for the template
 			"GroupName":          article.GroupName,
 			"CurrentYear":        articleActualYear,
 			"CurrentMonth":       articleActualMonth,

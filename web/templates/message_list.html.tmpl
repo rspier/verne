@@ -20,9 +20,9 @@
         .no-messages { color: #777; }
         .breadcrumb { margin-bottom: 20px; font-size: 0.9em; }
         .breadcrumb a { color: #007bff; }
-        .thread-root { padding-left: 0; }
-        .thread-children { list-style-type: none; padding-left: 25px; /* Indentation for children */ }
-        .thread-level-0 { /* Style for root messages if needed */ }
+        /* .thread-root class removed as it's no longer specifically used for different styling */
+        /* .thread-children class removed as children are not rendered in this list anymore */
+        /* .thread-level-0 class removed */
         .thread-item .message-id-debug {font-size: 0.75em; color: #aaa; margin-left: 10px;}
     </style>
 </head>
@@ -50,40 +50,31 @@
         </div>
 
         {{if .ThreadedMessages}}
-            <ul class="message-list thread-root">
+            <ul class="message-list"> {{/* Simplified class name */}}
                 {{range .ThreadedMessages}}
-                    {{template "messageThread" .}}
+                {{/* Each . here is a DisplayThreadItem, representing a thread root */}}
+                {{/* .Message is a *jwzArticleAdapter */}}
+                {{ $adapter := .Message }}
+                {{ $article := $adapter.Article }} {{/* Access the named 'Article' field of the adapter */}}
+                <li class="message-item">
+                    <div class="message-subject">
+                        <a href="/group/{{$article.GroupName}}/{{$article.Received.Year}}/{{printf "%02d" $article.Received.Month}}/msg{{$article.ArticleNum}}.html">{{$article.Subject}}</a>
+                    </div>
+                    <div class="message-meta">
+                        From: <span class="message-from">{{$article.DisplayFrom}}</span> |
+                        Date: {{$article.Date}} |
+                        Thread: {{.MessagesInSubThreadCount}} {{if gt .MessagesInSubThreadCount 1}}messages{{else}}message{{end}}
+                        <span class="message-id-debug">(Thread Root ID: {{$article.MessageID}})</span>
+                    </div>
+                    {{/* No recursive rendering of children here */}}
+                </li>
                 {{end}}
             </ul>
         {{else}}
             <p class="no-messages">No messages found for this month.</p>
         {{end}}
 
-        {{/* Define the recursive template for displaying a thread */}}
-        {{define "messageThread"}}
-        {{/* . (dot) here is a *jwz.ThreadableArticle */}}
-        {{/* .Depth is the depth of the current message in the thread */}}
-        {{/* .Message is our *jwzArticleAdapter */}}
-        {{/* .Message.Article is our *models.Article */}}
-        <li class="message-item thread-level-{{.Depth}}">
-            <div class="message-subject">
-                {{$article := .Message.Article}} {{/* Access the embedded models.Article directly */}}
-                <a href="#">{{$article.Subject}}</a> {{/* Temporarily simplified href */}}
-            </div>
-            <div class="message-meta">
-                {{$article := .Message.Article}} {{/* Access again for this scope */}}
-                From: <span class="message-from">{{$article.DisplayFrom}}</span> | Date: {{$article.Date}}
-                <span class="message-id-debug">(ID: {{$article.MessageID}})</span>
-            </div>
-            {{if .Children}}
-                <ul class="thread-children">
-                    {{range .Children}}
-                        {{template "messageThread" .}}
-                    {{end}}
-                </ul>
-            {{end}}
-        </li>
-        {{end}}
+        {{/* The "messageThread" template definition is removed */}}
 
         <div class="navigation" style="margin-top: 30px;">
             {{if .PrevMonthFound}}

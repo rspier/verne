@@ -14,7 +14,93 @@ import (
 	"nntp-web/internal/models"
 	"github.com/gatherstars-com/jwz"
 	"nntp-web/web/templates"
+	"os" // For os.Stdout for webLogger
 )
+
+var webLogger *log.Logger // For Apache-style logs
+
+func init() {
+	// Initialize webLogger to write to STDOUT without any prefix or flags from the standard log package.
+	// We want raw output for Apache-style logs.
+	webLogger = log.New(os.Stdout, "", 0)
+}
+
+// responseWriterInterceptor is a wrapper around http.ResponseWriter to capture status code and bytes written.
+type responseWriterInterceptor struct {
+	http.ResponseWriter
+	statusCode   int
+	bytesWritten int
+}
+
+func (w *responseWriterInterceptor) WriteHeader(statusCode int) {
+	w.statusCode = statusCode
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *responseWriterInterceptor) Write(b []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(b)
+	w.bytesWritten += n
+	return n, err
+}
+
+// newResponseWriterInterceptor creates a new responseWriterInterceptor.
+// It's important to initialize statusCode to http.StatusOK, as WriteHeader might not be called explicitly by all handlers
+// (e.g. if Write is called directly, or if an error occurs before WriteHeader).
+func newResponseWriterInterceptor(w http.ResponseWriter) *responseWriterInterceptor {
+	return &responseWriterInterceptor{ResponseWriter: w, statusCode: http.StatusOK}
+}
+
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startTime := time.Now()
+
+		interceptor := newResponseWriterInterceptor(w)
+
+		next.ServeHTTP(interceptor, r) // Call the next handler in the chain
+
+		duration := time.Since(startTime)
+
+		remoteUser := "-"
+		if r.URL.User != nil && r.URL.User.Username() != "" {
+			remoteUser = r.URL.User.Username()
+		}
+
+		referer := r.Referer()
+		if referer == "" {
+			referer = "-"
+		}
+		userAgent := r.UserAgent()
+		if userAgent == "" {
+			userAgent = "-"
+		}
+
+		// Apache log time format: 02/Jan/2006:15:04:05 -0700
+		logTime := startTime.Format("02/Jan/2006:15:04:05 -0700")
+
+		// Use RemoteAddr, but consider X-Forwarded-For if behind a proxy.
+		// For simplicity, using RemoteAddr directly here.
+		clientIP := r.RemoteAddr
+		if colonPos := strings.LastIndex(clientIP, ":"); colonPos != -1 {
+			clientIP = clientIP[:colonPos] // Strip port if present (common for RemoteAddr)
+		}
+
+
+		webLogger.Printf("%s - %s [%s] \"%s %s %s\" %d %d \"%s\" \"%s\" %dms",
+			clientIP,
+			remoteUser,
+			logTime,
+			r.Method,
+			r.RequestURI,
+			r.Proto,
+			interceptor.statusCode,
+			interceptor.bytesWritten,
+			referer,
+			userAgent,
+			duration.Milliseconds(),
+		)
+	})
+}
+
 
 // jwzArticleAdapter adapts models.Article to jwz.Threadable interface
 type jwzArticleAdapter struct {
@@ -207,8 +293,13 @@ func (s *Server) routeGroupRequests(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) ListenAndServe() error {
 	addr := fmt.Sprintf(":%d", s.config.ServerPort)
+	// Standard logger (STDERR) for this startup message
 	log.Printf("Server listening on http://localhost%s", addr)
-	return http.ListenAndServe(addr, s.router)
+
+	// Wrap the main router with the logging middleware
+	loggedRouter := loggingMiddleware(s.router)
+
+	return http.ListenAndServe(addr, loggedRouter) // Use the wrapped router
 }
 
 func (s *Server) renderTemplate(w http.ResponseWriter, r *http.Request, name string, data interface{}) {

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	htmltemplate "html/template"
 	"io"
-	"log"
+	// "log" // No longer used directly in this file after removing log.SetOutput
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -284,7 +284,8 @@ func TestServer_handleListMessages_SpecificMonth(t *testing.T) {
 				dbMock.ExpectQuery(nextMonthNavQueryRgx).WithArgs(groupID, sqlmock.AnyArg()).WillReturnError(sql.ErrNoRows)
 			},
 			expectedStatusCode: http.StatusOK,
-			expectedBodyContains: []string{"Nov News"},
+			// Be more specific with the "From" check to include the span, as that's what's rendered.
+			expectedBodyContains: []string{">Nov News</a>", `From: <span class="message-from">User</span>`, "Thread: 1 message"},
 		},
 	}
 	for _, tt := range tests {
@@ -352,10 +353,20 @@ func TestServer_handleListMessages_JWZThreading(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 	body := rr.Body.String()
-	assert.Contains(t, body, "Root Message 1")
-	// Add (?s) for dotall to match across newlines
-	assert.Regexp(t, regexp.MustCompile(`(?s)thread-level-0.*?Root Message 1`), body)
-	assert.Regexp(t, regexp.MustCompile(`(?s)thread-level-1.*?Re: Root Message 1`), body)
+
+	// Check for the root message subject
+	assert.Contains(t, body, ">Root Message 1</a>")
+	// Check for the correct thread count
+	assert.Contains(t, body, "Thread: 2 messages")
+
+	// Ensure the child message's subject is NOT directly rendered as a list item
+	assert.NotContains(t, body, ">Re: Root Message 1</a>")
+
+	// Ensure old CSS classes for recursive display are gone
+	assert.NotContains(t, body, "thread-level-0")
+	assert.NotContains(t, body, "thread-level-1")
+	assert.NotContains(t, body, "thread-children")
+
 
 	assert.NoError(t, dbMock.ExpectationsWereMet())
 	nntpMock.AssertExpectations(t)
@@ -418,5 +429,7 @@ func TestServer_handleListMessages_DefaultToLatestMonth(t *testing.T) {
 }
 
 func init() {
-	log.SetOutput(io.Discard)
+	// Logs will go to os.Stderr by default if not set, or set explicitly.
+	// Removing log.SetOutput(io.Discard) to enable log viewing for tests.
+	// If "log" import becomes unused, it will be caught by compiler.
 }

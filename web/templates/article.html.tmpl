@@ -22,8 +22,31 @@
         .thread-item { background-color: #f9f9f9; margin-bottom: 8px; padding: 10px; border-radius: 4px; border: 1px solid #eee; }
         .thread-item-subject a { font-weight: bold; }
         .thread-item-meta { font-size: 0.85em; color: #666; margin-top: 4px; }
+        .thread-list-nested { list-style-type: none; padding-left: 20px; /* Indentation for nested threads */ }
         .error-message { color: red; font-weight: bold; }
     </style>
+
+{{/* Define the recursive template for thread nodes */}}
+{{define "threadNode"}}
+    <li class="thread-item">
+        {{ $adapter := .Message }}     {{/* .Message is a *jwzArticleAdapter */}}
+        {{ $article := $adapter.Article }} {{/* Access the named 'Article' field */}}
+        <div class="thread-item-subject">
+            <a href="/group/{{$article.GroupName}}/{{$article.Received.Year}}/{{printf "%02d" $article.Received.Month}}/msg{{$article.ArticleNum}}.html">{{$article.Subject}}</a>
+        </div>
+        <div class="thread-item-meta">
+            From: {{$article.DisplayFrom}} | Date: {{$article.Date}}
+        </div>
+        {{if .Children}}
+            <ul class="thread-list-nested"> {{/* Nested list for children */}}
+                {{range .Children}}
+                    {{template "threadNode" .}}
+                {{end}}
+            </ul>
+        {{end}}
+    </li>
+{{end}}
+
 </head>
 <body>
     <div class="container">
@@ -46,7 +69,7 @@
                     <li><strong>From:</strong> {{.Article.DisplayFrom}}</li>
                     <li><strong>Date:</strong> {{.Article.Date}}</li>
                     <li><strong>Message-ID:</strong>
-                        <a href="/group/{{.Article.GroupName}}/;.msgid={{.Article.MessageID}}"><code>{{.Article.MessageID}}</code></a>
+                        <a href="/group/{{.Article.GroupName}}/;.msgid={{.Article.MessageID}}"><code>&lt;{{.Article.MessageID}}&gt;</code></a>
                     </li>
                     <!-- Lines, Bytes, Raw Link, and Message-ID Lookup Link removed or consolidated -->
                 </ul>
@@ -67,19 +90,12 @@
             <p style="font-style: italic; margin-top: 15px; font-size: 0.9em;">Note: This article may contain other non-text parts (e.g., attachments) which are not displayed.</p>
             {{end}}
 
-            {{if .ThreadMessages}}
+            {{if .ArticleThreadTree}}
             <div class="thread-section">
                 <h2>Other Messages in This Thread</h2>
-                <ul class="thread-list">
-                    {{range .ThreadMessages}}
-                    <li class="thread-item">
-                        <div class="thread-item-subject">
-                             <a href="/group/{{.GroupName}}/{{.Received.Year}}/{{printf "%02d" .Received.Month}}/msg{{.ArticleNum}}.html">{{.Subject}}</a>
-                        </div>
-                        <div class="thread-item-meta">
-                            From: {{.DisplayFrom}} | Date: {{.Date}}
-                        </div>
-                    </li>
+                <ul class="thread-list"> {{/* Main list for top-level thread items */}}
+                    {{range .ArticleThreadTree}}
+                        {{template "threadNode" .}}
                     {{end}}
                 </ul>
             </div>
