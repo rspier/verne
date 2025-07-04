@@ -258,7 +258,18 @@ func NewServer(cfg *config.Config, db *database.DB, nntpCli nntpclient.NNTPClien
 }
 
 func (s *Server) setupRoutes() {
-	s.router.HandleFunc("/group/", s.routeGroupRequests)
+	s.router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// This handler is for the root path.
+		// http.ServeMux matches longer patterns first, so if r.URL.Path is not "/",
+		// it means no other more specific handler (like "/group/") matched it.
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "/group/", http.StatusFound) // Or http.StatusMovedPermanently
+		} else {
+			// For any other path that falls through to this root handler, serve a 404.
+			http.NotFound(w, r)
+		}
+	})
+	s.router.HandleFunc("/group/", s.routeGroupRequests) // This will handle all /group/* requests
 }
 
 func (s *Server) routeGroupRequests(w http.ResponseWriter, r *http.Request) {

@@ -6,57 +6,133 @@
     <title>Newsgroups</title>
     <style>
         body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
-        h1 { color: #333; }
-        ul { list-style-type: none; padding: 0; }
-        li { background-color: #fff; margin-bottom: 8px; padding: 12px; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1, h2 { color: #333; }
         a { text-decoration: none; color: #007bff; }
         a:hover { text-decoration: underline; }
         .description { font-size: 0.9em; color: #555; margin-top: 4px; }
-        .no-groups { color: #777; }
+        .no-groups { color: #777; margin-top: 1em; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 20px; background-color: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        th, td { padding: 8px 12px; border: 1px solid #ddd; text-align: left; }
+        th { background-color: #f0f0f0; }
+        .group-section { margin-bottom: 30px; }
+        .group-name { font-weight: bold; }
+        .col-name { width: 25%; }
+        .col-description { width: 45%; }
+        .col-last-post { width: 15%; }
+        .col-avg-posts { width: 15%; }
+
 
         /* Responsive adjustments */
         @media (max-width: 768px) {
             body {
-                margin: 10px; /* Reduce body margin */
+                margin: 10px;
             }
             h1 {
-                font-size: 1.5em; /* Slightly smaller H1 */
+                font-size: 1.5em;
             }
-            li {
-                padding: 8px; /* Reduce padding in list items */
-                margin-bottom: 6px;
+            h2 {
+                font-size: 1.3em;
             }
-            .description {
-                font-size: 0.85em; /* Slightly smaller description */
+            th, td {
+                padding: 6px 8px;
+                font-size: 0.9em;
             }
+            /* Further responsive table handling might be needed, e.g. horizontal scroll or card layout */
+        }
+         @media (max-width: 480px) {
+            .col-description { display: none; } /* Hide description on very small screens */
+            .col-name { width: 50%; }
+            .col-last-post { width: 25%; }
+            .col-avg-posts { width: 25%; }
+             th, td { font-size: 0.85em; }
         }
     </style>
 </head>
 <body>
     <h1>Available Newsgroups</h1>
-    {{if .Groups}}
-    <ul>
-        {{range .Groups}}
-        <li>
-            <a href="/group/{{.Name}}/">{{.Name}}</a>
-            {{if .Description}}
-            <div class="description">{{.Description}}</div>
-            {{end}}
-            <div class="group-stats" style="font-size: 0.8em; color: #444; margin-top: 5px;">
-                {{if .LastPostDate}}
-                    Last post: {{ .LastPostDate.UTC.Format "2006-01" }}
-                    {{if .ShowAvgPosts}} | {{end}}
-                {{end}}
-                {{if .ShowAvgPosts}}
-                    Avg posts/day (last 30 days): {{printf "%.1f" .AvgPostsLastMonth}}
-                {{end}}
-            </div>
-        </li>
+
+    {{/* Active Groups Section */}}
+    <div class="group-section">
+        <h2>Active Newsgroups (posts in last month)</h2>
+        {{if .ActiveGroups}}
+            <table>
+                <thead>
+                    <tr>
+                        <th class="col-name">Name</th>
+                        <th class="col-description">Description</th>
+                        <th class="col-last-post">Last Post</th>
+                        <th class="col-avg-posts">Avg Posts/Day (Last 30 Days)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .ActiveGroups}}
+                    <tr>
+                        <td class="group-name"><a href="/group/{{.Name}}/">{{.Name}}</a></td>
+                        <td>{{.Description}}</td>
+                        <td>{{if .LastPostDate}}{{.LastPostDate.UTC.Format "2006-01"}}{{else}}-{{end}}</td>
+                        <td>{{if .ShowAvgPosts}}{{printf "%.1f" .AvgPostsLastMonth}}{{else}}-{{end}}</td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        {{else}}
+            <p class="no-groups">No groups with activity in the last month.</p>
         {{end}}
-    </ul>
-    {{else}}
-    <p class="no-groups">No newsgroups found.</p>
-    {{end}}
+    </div>
+
+    {{/* Slow Groups Section */}}
+    <div class="group-section">
+        <h2>Slow Newsgroups (posts in last year, but not last month)</h2>
+        {{if .SlowGroups}}
+            <table>
+                <thead>
+                    <tr>
+                        <th class="col-name">Name</th>
+                        <th class="col-description">Description</th>
+                        <th class="col-last-post">Last Post</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .SlowGroups}}
+                    <tr>
+                        <td class="group-name"><a href="/group/{{.Name}}/">{{.Name}}</a></td>
+                        <td>{{.Description}}</td>
+                        <td>{{if .LastPostDate}}{{.LastPostDate.UTC.Format "2006-01"}}{{else}}-{{end}}</td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        {{else}}
+            <p class="no-groups">No groups with activity in the last year (excluding last month).</p>
+        {{end}}
+    </div>
+
+    {{/* Inactive Groups Section */}}
+    <div class="group-section">
+        <h2>Inactive Newsgroups (no posts in over a year)</h2>
+        {{if .InactiveGroups}}
+            <table>
+                <thead>
+                    <tr>
+                        <th class="col-name">Name</th>
+                        <th class="col-description">Description</th>
+                        <th class="col-last-post">Last Post</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .InactiveGroups}}
+                    <tr>
+                        <td class="group-name"><a href="/group/{{.Name}}/">{{.Name}}</a></td>
+                        <td>{{.Description}}</td>
+                        <td>{{if .LastPostDate}}{{.LastPostDate.UTC.Format "2006-01"}}{{else}}-{{end}}</td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        {{else}}
+            <p class="no-groups">No inactive groups found (or all groups have some activity).</p>
+        {{end}}
+    </div>
 
     {{if .Error}}
     <p style="color: red;">Error: {{.Error}}</p>
