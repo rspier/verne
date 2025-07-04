@@ -24,6 +24,59 @@
         /* .thread-children class removed as children are not rendered in this list anymore */
         /* .thread-level-0 class removed */
         .thread-item .message-id-debug {font-size: 0.75em; color: #aaa; margin-left: 10px;}
+
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            body {
+                margin: 10px;
+                font-size: 15px; /* Slightly smaller base font for mobile */
+            }
+            .container {
+                padding: 10px;
+            }
+            h1 {
+                font-size: 1.6em;
+            }
+            h2 {
+                font-size: 1.3em;
+            }
+            .navigation {
+                flex-direction: column; /* Stack navigation items */
+                align-items: center;   /* Center them */
+            }
+            .navigation a, .navigation span {
+                margin-bottom: 10px; /* Add space between stacked nav items */
+                display: block;      /* Make them block to take full width if needed, or center well */
+                text-align: center;
+            }
+            .navigation a:last-child, .navigation span:last-child {
+                margin-bottom: 0; /* No margin for the last item in a stacked nav */
+            }
+            .message-subject a {
+                font-size: 1em; /* Adjust subject font size */
+            }
+            .message-meta {
+                font-size: 0.8em; /* Adjust meta font size */
+            }
+            .breadcrumb {
+                font-size: 0.85em;
+            }
+        }
+        @media (max-width: 480px) {
+            h1 {
+                font-size: 1.4em;
+            }
+            h2 {
+                font-size: 1.1em;
+            }
+            .message-subject a {
+                font-size: 0.95em;
+            }
+            .message-meta {
+                font-size: 0.75em;
+                line-height: 1.4; /* Improve readability of smaller text */
+            }
+        }
     </style>
 </head>
 <body>

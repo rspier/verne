@@ -24,6 +24,70 @@
         .thread-item-meta { font-size: 0.85em; color: #666; margin-top: 4px; }
         .thread-list-nested { list-style-type: none; padding-left: 20px; /* Indentation for nested threads */ }
         .error-message { color: red; font-weight: bold; }
+
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            body {
+                margin: 10px;
+                font-size: 15px; /* Slightly smaller base font */
+            }
+            .container {
+                padding: 10px;
+            }
+            .article-header h1 { /* Article title */
+                font-size: 1.5em;
+            }
+            .article-meta { /* From, Date, Message-ID list */
+                font-size: 0.85em;
+            }
+            .article-body {
+                font-size: 0.95em; /* Adjust body font if needed, or keep line-height */
+                line-height: 1.5;
+            }
+            .article-body pre {
+                word-break: break-word; /* Help break long words in pre tags */
+            }
+            .thread-section h2 { /* "Other Messages in This Thread" title */
+                font-size: 1.2em;
+            }
+            .thread-item {
+                padding: 8px; /* Reduce padding in thread items */
+            }
+            .thread-item-subject a {
+                 font-size: 0.95em;
+            }
+            .thread-item-meta {
+                font-size: 0.8em;
+            }
+            .thread-list-nested {
+                padding-left: 15px; /* Slightly reduce thread indentation */
+            }
+            .breadcrumb {
+                font-size: 0.85em;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .article-header h1 {
+                font-size: 1.3em;
+            }
+            .article-meta {
+                font-size: 0.8em;
+            }
+            .article-body {
+                font-size: 0.9em;
+            }
+             .thread-section h2 {
+                font-size: 1.1em;
+            }
+            .thread-item-subject a {
+                 font-size: 0.9em;
+            }
+            .thread-item-meta {
+                font-size: 0.75em;
+                line-height: 1.4;
+            }
+        }
     </style>
 
 {{/* Define the recursive template for thread nodes */}}
