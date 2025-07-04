@@ -42,6 +42,15 @@
             {{if .Description}}
             <div class="description">{{.Description}}</div>
             {{end}}
+            <div class="group-stats" style="font-size: 0.8em; color: #444; margin-top: 5px;">
+                {{if .LastPostDate}}
+                    Last post: {{ .LastPostDate.UTC.Format "2006-01" }}
+                    {{if .ShowAvgPosts}} | {{end}}
+                {{end}}
+                {{if .ShowAvgPosts}}
+                    Avg posts/day (last 30 days): {{printf "%.1f" .AvgPostsLastMonth}}
+                {{end}}
+            </div>
         </li>
         {{end}}
     </ul>

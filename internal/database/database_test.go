@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"nntp-web/internal/config" // Added for testCfg
 	"nntp-web/internal/models"
-	// "nntp-web/internal/config" // Removed: unused after cfg was commented out
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -24,7 +24,11 @@ func TestDB_GetAllNewsgroups(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	query := "SELECT id, name, description FROM `groups` ORDER BY name"
+	// Manually crafted regex for sqlmock, escaping . and ()
+	queryRegex := `SELECT g\.id, g\.name, g\.description, last_post\.max_received_date FROM ` + "`groups`" + ` g LEFT JOIN \(SELECT group_id, MAX\(received\) as max_received_date FROM articles GROUP BY group_id\) last_post ON g\.id = last_post\.group_id ORDER BY g\.name`
+
+	mockTime1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	var mockTime2Nil *time.Time // For groups with no posts
 
 	tests := []struct {
 		name          string
@@ -34,19 +38,19 @@ func TestDB_GetAllNewsgroups(t *testing.T) {
 		mockExpectErr error
 	}{
 		{
-			name: "success - multiple groups",
-			mockRows: sqlmock.NewRows([]string{"id", "name", "description"}).
-				AddRow(1, "alt.test", "Alternative test group").
-				AddRow(2, "comp.sys.cbm", "Commodore systems"),
+			name: "success - multiple groups with and without last post date",
+			mockRows: sqlmock.NewRows([]string{"id", "name", "description", "max_received_date"}).
+				AddRow(1, "alt.test", "Alternative test group", mockTime1). // Has last post
+				AddRow(2, "comp.sys.cbm", "Commodore systems", nil),      // No last post (max_received_date is NULL)
 			expected: []models.Newsgroup{
-				{ID: 1, Name: "alt.test", Description: "Alternative test group"},
-				{ID: 2, Name: "comp.sys.cbm", Description: "Commodore systems"},
+				{ID: 1, Name: "alt.test", Description: "Alternative test group", LastPostDate: &mockTime1},
+				{ID: 2, Name: "comp.sys.cbm", Description: "Commodore systems", LastPostDate: mockTime2Nil},
 			},
 			expectErr: false,
 		},
 		{
 			name:     "success - no groups",
-			mockRows: sqlmock.NewRows([]string{"id", "name", "description"}),
+			mockRows: sqlmock.NewRows([]string{"id", "name", "description", "max_received_date"}), // Columns must match query
 			expected: []models.Newsgroup{},
 			expectErr: false,
 		},
@@ -65,9 +69,9 @@ func TestDB_GetAllNewsgroups(t *testing.T) {
 			// NewWithSQLDB will use a default TTL if config is nil or CacheTTLSeconds is not positive.
 			db := NewWithSQLDB(mockDB, nil)
 			if tt.mockExpectErr != nil {
-				mock.ExpectQuery(regexp.QuoteMeta(query)).WillReturnError(tt.mockExpectErr)
+				mock.ExpectQuery(queryRegex).WillReturnError(tt.mockExpectErr) // Use queryRegex directly
 			} else {
-				mock.ExpectQuery(regexp.QuoteMeta(query)).WillReturnRows(tt.mockRows)
+				mock.ExpectQuery(queryRegex).WillReturnRows(tt.mockRows) // Use queryRegex directly
 			}
 
 			groups, err := db.GetAllNewsgroups()
@@ -93,6 +97,149 @@ func TestDB_GetAllNewsgroups(t *testing.T) {
 
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Errorf("there were unfulfilled expectations: %s", err)
+			}
+		})
+	}
+}
+
+func TestDB_GetGroupActivityStats(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer mockDB.Close()
+
+	groupID := uint16(1)
+	lookbackDays := 30
+
+	query := regexp.QuoteMeta(`
+		SELECT COUNT(*)
+		FROM articles
+		WHERE group_id = ? AND received >= DATE_SUB(NOW(), INTERVAL ? DAY)`)
+
+	tests := []struct {
+		name                   string
+		groupID                uint16
+		lookbackDays           int
+		setupMock              func(mock sqlmock.Sqlmock)
+		expectedAvgPosts       float64
+		expectedTotalPosts     int
+		expectedHasActivity    bool
+		expectErr              bool
+		expectErrMsg           string
+		runTwiceForCacheCheck  bool
+	}{
+		{
+			name:            "success - posts found",
+			groupID:         groupID,
+			lookbackDays:    lookbackDays,
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(query).WithArgs(groupID, lookbackDays).WillReturnRows(sqlmock.NewRows([]string{"COUNT(*)"}).AddRow(15))
+			},
+			expectedAvgPosts:    0.5, // 15 posts / 30 days
+			expectedTotalPosts:  15,
+			expectedHasActivity: true,
+			expectErr:           false,
+		},
+		{
+			name:            "success - no posts found",
+			groupID:         groupID,
+			lookbackDays:    lookbackDays,
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(query).WithArgs(groupID, lookbackDays).WillReturnRows(sqlmock.NewRows([]string{"COUNT(*)"}).AddRow(0))
+			},
+			expectedAvgPosts:    0.0,
+			expectedTotalPosts:  0,
+			expectedHasActivity: false,
+			expectErr:           false,
+		},
+		{
+			name:            "error - invalid lookbackDays",
+			groupID:         groupID,
+			lookbackDays:    0,
+			setupMock:       func(mock sqlmock.Sqlmock) { /* No DB call expected */ },
+			expectErr:       true,
+			expectErrMsg:    "lookbackDays must be positive",
+		},
+		{
+			name:            "error - database query error",
+			groupID:         groupID,
+			lookbackDays:    lookbackDays,
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(query).WithArgs(groupID, lookbackDays).WillReturnError(errors.New("db count error"))
+			},
+			expectErr:    true,
+			expectErrMsg: "failed to count recent articles",
+		},
+		{
+			name:            "cache hit - posts found",
+			groupID:         groupID,
+			lookbackDays:    lookbackDays,
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(query).WithArgs(groupID, lookbackDays).WillReturnRows(sqlmock.NewRows([]string{"COUNT(*)"}).AddRow(15)) // Expect query only once, .Times(1) is default
+			},
+			expectedAvgPosts:    0.5,
+			expectedTotalPosts:  15,
+			expectedHasActivity: true,
+			expectErr:           false,
+			runTwiceForCacheCheck: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a minimal config for tests that might use db.cfg
+			// For this test, LogSQLQueries isn't the focus, but good to have a non-nil cfg.
+			testCfg := &config.Config{CacheTTLSeconds: 10} // Short TTL for cache test if needed, though GetGroupActivityStats uses fixed 1hr
+			db := NewWithSQLDB(mockDB, testCfg)
+			tt.setupMock(mock)
+
+			avg, total, active, err := db.GetGroupActivityStats(tt.groupID, tt.lookbackDays)
+
+			if (err != nil) != tt.expectErr {
+				t.Errorf("GetGroupActivityStats() error = %v, expectErr %v", err, tt.expectErr)
+				if err != nil {
+					t.Logf("Actual error message: %s", err.Error())
+				}
+				return
+			}
+			if tt.expectErr {
+				if !strings.Contains(err.Error(), tt.expectErrMsg) {
+					t.Errorf("GetGroupActivityStats() error message = '%s', want to contain '%s'", err.Error(), tt.expectErrMsg)
+				}
+				return
+			}
+
+			if active != tt.expectedHasActivity {
+				t.Errorf("GetGroupActivityStats() hasRecentActivity = %v, want %v", active, tt.expectedHasActivity)
+			}
+			if total != tt.expectedTotalPosts {
+				t.Errorf("GetGroupActivityStats() totalPostsInPeriod = %d, want %d", total, tt.expectedTotalPosts)
+			}
+			// Compare floats with a small tolerance if exact match is problematic, but for simple division it should be fine.
+			if avg != tt.expectedAvgPosts {
+				t.Errorf("GetGroupActivityStats() avgPosts = %f, want %f", avg, tt.expectedAvgPosts)
+			}
+
+			if tt.runTwiceForCacheCheck {
+				// Call again, should hit cache if setupMock expected only one call.
+				avg2, total2, active2, err2 := db.GetGroupActivityStats(tt.groupID, tt.lookbackDays)
+				if err2 != nil {
+					t.Errorf("GetGroupActivityStats() (cache check) unexpected error: %v", err2)
+				}
+				if active2 != tt.expectedHasActivity {
+					t.Errorf("GetGroupActivityStats() (cache check) hasRecentActivity = %v, want %v", active2, tt.expectedHasActivity)
+				}
+				if total2 != tt.expectedTotalPosts {
+					t.Errorf("GetGroupActivityStats() (cache check) totalPostsInPeriod = %d, want %d", total2, tt.expectedTotalPosts)
+				}
+				if avg2 != tt.expectedAvgPosts {
+					t.Errorf("GetGroupActivityStats() (cache check) avgPosts = %f, want %f", avg2, tt.expectedAvgPosts)
+				}
+			}
+
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("sqlmock expectations were not met: %s", err)
 			}
 		})
 	}
@@ -541,13 +688,15 @@ func TestDB_GetAllNewsgroups_ScanError(t *testing.T) {
 	defer mockDB.Close()
 
 	db := NewWithSQLDB(mockDB, nil)
-	query := "SELECT id, name, description FROM `groups` ORDER BY name"
+	// Manually crafted regex for sqlmock, escaping . and ()
+	queryRegex := `SELECT g\.id, g\.name, g\.description, last_post\.max_received_date FROM ` + "`groups`" + ` g LEFT JOIN \(SELECT group_id, MAX\(received\) as max_received_date FROM articles GROUP BY group_id\) last_post ON g\.id = last_post\.group_id ORDER BY g\.name`
 
-	rows := sqlmock.NewRows([]string{"id", "name", "description"}).
-		AddRow(1, "comp.lang.go", "Go Programming Language").
-		AddRow("not-an-int", "another.group", "Another description")
+	// Rows must match the new query structure (4 columns)
+	rows := sqlmock.NewRows([]string{"id", "name", "description", "max_received_date"}).
+		AddRow(1, "comp.lang.go", "Go Programming Language", nil). // Valid row
+		AddRow("not-an-int", "another.group", "Another description", nil) // Row designed to cause scan error on 'id'
 
-	mock.ExpectQuery(regexp.QuoteMeta(query)).WillReturnRows(rows)
+	mock.ExpectQuery(queryRegex).WillReturnRows(rows)
 	_, err = db.GetAllNewsgroups()
 	if err == nil {
 		t.Errorf("Expected an error from GetAllNewsgroups due to Scan failure, but got nil")

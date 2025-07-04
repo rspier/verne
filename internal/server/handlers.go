@@ -84,12 +84,42 @@ func buildDisplayTree(rootContainer jwz.Threadable, currentDepth int) ([]*Displa
 
 func (s *Server) handleListGroups() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		groups, err := s.db.GetAllNewsgroups()
+		groups, err := s.db.GetAllNewsgroups() // This now includes LastPostDate
 		if err != nil {
 			log.Printf("Error fetching newsgroups: %v", err)
 			http.Error(w, "Failed to retrieve newsgroups", http.StatusInternalServerError)
 			return
 		}
+
+		// Define "last month" as the last 30 days for checking recent activity
+		lookbackDays := 30
+		thresholdDate := time.Now().AddDate(0, 0, -lookbackDays)
+
+		// Augment groups with activity stats
+		for i := range groups {
+			group := &groups[i] // Use pointer to modify the item in the slice
+
+			if group.LastPostDate != nil && group.LastPostDate.After(thresholdDate) {
+				// Group has posts within the lookback period, get activity stats
+				avgPosts, _, hasActivity, errStats := s.db.GetGroupActivityStats(group.ID, lookbackDays) // Use blank identifier for totalPosts
+				if errStats != nil {
+					log.Printf("Error fetching activity stats for group %s (ID %d): %v", group.Name, group.ID, errStats)
+					// Decide how to handle this error - e.g., don't show stats for this group
+					group.ShowAvgPosts = false
+				} else {
+					if hasActivity {
+						group.AvgPostsLastMonth = avgPosts
+						// log.Printf("Group %s: Total posts in last %d days: %d, Avg: %.2f", group.Name, lookbackDays, totalPosts, avgPosts) // Debug log
+						group.ShowAvgPosts = true
+					} else {
+						group.ShowAvgPosts = false
+					}
+				}
+			} else {
+				group.ShowAvgPosts = false // No recent posts or no last post date
+			}
+		}
+
 		s.renderTemplate(w, r, "groups.html.tmpl", map[string]interface{}{"Groups": groups})
 	}
 }

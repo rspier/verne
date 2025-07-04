@@ -7,6 +7,11 @@ type Newsgroup struct {
 	ID          uint16 `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
+
+	// Fields for displaying group statistics
+	LastPostDate      *time.Time `json:"last_post_date,omitempty"` // Stores the full timestamp of the last post
+	AvgPostsLastMonth float64    `json:"avg_posts_last_month,omitempty"`
+	ShowAvgPosts      bool       `json:"show_avg_posts,omitempty"`
 }
 
 // Article represents an article in a newsgroup.

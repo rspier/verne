@@ -207,7 +207,19 @@ func TestServer_handleShowArticle(t *testing.T) {
 }
 
 func TestServer_RouteGroupRequests(t *testing.T) {
-	expectedListGroupsSQLQuery := regexp.QuoteMeta("SELECT id, name, description FROM `groups` ORDER BY name")
+	// Updated query to match the one in db.GetAllNewsgroups
+	expectedListGroupsSQLQuery := regexp.QuoteMeta(`
+		SELECT
+			g.id, g.name, g.description,
+			last_post.max_received_date
+		FROM
+			` + "`groups`" + ` g
+		LEFT JOIN
+			(SELECT group_id, MAX(received) as max_received_date FROM articles GROUP BY group_id) last_post
+		ON
+			g.id = last_post.group_id
+		ORDER BY
+			g.name`)
 
 	tests := []struct {
 		name               string
@@ -221,9 +233,10 @@ func TestServer_RouteGroupRequests(t *testing.T) {
 			name: "dispatch to list groups - success",
 			path: "/group/",
 			setupDbMockFn: func(dbMock sqlmock.Sqlmock) {
-				rows := sqlmock.NewRows([]string{"id", "name", "description"}).
-					AddRow(1, "alt.test", "Test group").
-					AddRow(2, "comp.lang.go", "Go Language")
+				// Rows now need to include max_received_date (can be nil for sql.NullTime)
+				rows := sqlmock.NewRows([]string{"id", "name", "description", "max_received_date"}).
+					AddRow(1, "alt.test", "Test group", nil). // Example with nil last post date
+					AddRow(2, "comp.lang.go", "Go Language", time.Now()) // Example with a last post date
 				dbMock.ExpectQuery(expectedListGroupsSQLQuery).WillReturnRows(rows)
 			},
 			expectedStatusCode: http.StatusOK,

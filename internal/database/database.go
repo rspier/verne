@@ -95,19 +95,39 @@ func (db *DB) GetAllNewsgroups() ([]models.Newsgroup, error) {
 	}
 	log.Println("Cache miss for GetAllNewsgroups, querying DB")
 
-	query := "SELECT id, name, description FROM `groups` ORDER BY name"
+	query := `
+		SELECT
+			g.id, g.name, g.description,
+			last_post.max_received_date
+		FROM
+			` + "`groups`" + ` g
+		LEFT JOIN
+			(SELECT group_id, MAX(received) as max_received_date FROM articles GROUP BY group_id) last_post
+		ON
+			g.id = last_post.group_id
+		ORDER BY
+			g.name`
+
 	rows, err := db.sqlDB.Query(query)
 	if err != nil {
-		return nil, fmt.Errorf("query failed: %w", err)
+		return nil, fmt.Errorf("query for newsgroups with stats failed: %w", err)
 	}
 	defer rows.Close()
 
 	var groups []models.Newsgroup
 	for rows.Next() {
 		var group models.Newsgroup
-		if err := rows.Scan(&group.ID, &group.Name, &group.Description); err != nil {
-			return nil, fmt.Errorf("failed to scan group row: %w", err)
+		var lastPostNullTime sql.NullTime // Use sql.NullTime for potentially null MAX(received)
+
+		if err := rows.Scan(&group.ID, &group.Name, &group.Description, &lastPostNullTime); err != nil {
+			return nil, fmt.Errorf("failed to scan group row with last post date: %w", err)
 		}
+
+		if lastPostNullTime.Valid {
+			group.LastPostDate = &lastPostNullTime.Time // Store as *time.Time
+		}
+		// AvgPostsLastMonth and ShowAvgPosts will be populated by the handler later
+
 		groups = append(groups, group)
 	}
 
@@ -188,6 +208,75 @@ func (db *DB) GetMessagesForGroupMonth(groupName string, year int, month int) ([
 		log.Printf("Cached result for GetMessagesForGroupMonth: %s", cacheKey)
 	}
 	return articles, nil
+}
+
+// CachedGroupActivityStats is used to store the result of GetGroupActivityStats in cache.
+type CachedGroupActivityStats struct {
+	AvgPostsPerDay    float64
+	TotalPostsInPeriod int
+	HasRecentActivity bool
+}
+
+// GetGroupActivityStats calculates average posts per day for a group over a lookback period.
+// It returns average posts, total posts in period, and a flag indicating recent activity.
+// Results are cached for 1 hour.
+func (db *DB) GetGroupActivityStats(groupID uint16, lookbackDays int) (avgPosts float64, totalPostsInPeriod int, hasRecentActivity bool, err error) {
+	cacheKey := fmt.Sprintf("groupactivity:%d:%ddays", groupID, lookbackDays)
+
+	if db.cache != nil {
+		if cached, found := db.cache.Get(cacheKey); found {
+			if cachedStats, ok := cached.(CachedGroupActivityStats); ok {
+				log.Printf("Cache hit for GetGroupActivityStats: %s", cacheKey)
+				return cachedStats.AvgPostsPerDay, cachedStats.TotalPostsInPeriod, cachedStats.HasRecentActivity, nil
+			}
+		}
+	}
+	log.Printf("Cache miss for GetGroupActivityStats: %s, querying DB", cacheKey)
+
+	if lookbackDays <= 0 {
+		err = fmt.Errorf("lookbackDays must be positive, got %d", lookbackDays)
+		return
+	}
+
+	query := `
+		SELECT COUNT(*)
+		FROM articles
+		WHERE group_id = ? AND received >= DATE_SUB(NOW(), INTERVAL ? DAY)` // Using NOW() for better precision with time
+
+	var postCount int
+	dbErr := db.sqlDB.QueryRow(query, groupID, lookbackDays).Scan(&postCount)
+	if dbErr != nil {
+		// COUNT(*) should always return a row, even if count is 0.
+		// So, sql.ErrNoRows here would be unexpected.
+		// If there's any other error, we return it.
+		if dbErr != sql.ErrNoRows { // defensive check, though not expected for COUNT(*)
+			err = fmt.Errorf("failed to count recent articles for group %d: %w", groupID, dbErr)
+			return
+		}
+		// If it somehow was sql.ErrNoRows, treat as 0 count.
+		postCount = 0
+	}
+
+	totalPostsInPeriod = postCount
+
+	if totalPostsInPeriod > 0 {
+		hasRecentActivity = true
+		avgPosts = float64(totalPostsInPeriod) / float64(lookbackDays)
+	} else {
+		hasRecentActivity = false
+		avgPosts = 0.0
+	}
+
+	if db.cache != nil {
+		cachedData := CachedGroupActivityStats{
+			AvgPostsPerDay:    avgPosts,
+			TotalPostsInPeriod: totalPostsInPeriod,
+			HasRecentActivity: hasRecentActivity,
+		}
+		db.cache.Set(cacheKey, cachedData, 1*time.Hour) // Cache for 1 hour
+		log.Printf("Cached result for GetGroupActivityStats: %s", cacheKey)
+	}
+	return
 }
 
 // GetMinMaxMessageMonthsForGroup finds the earliest and latest month/year with messages for a group.
