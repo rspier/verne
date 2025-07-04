@@ -14,7 +14,8 @@ import (
 	"nntp-web/internal/models"
 	"github.com/gatherstars-com/jwz"
 	"nntp-web/web/templates"
-	"os" // For os.Stdout for webLogger
+	"os"     // For os.Stdout for webLogger
+	"errors" // Required for the new dict function
 )
 
 var webLogger *log.Logger // For Apache-style logs
@@ -223,7 +224,22 @@ type Server struct {
 
 // NewServer creates and configures a new server instance.
 func NewServer(cfg *config.Config, db *database.DB, nntpCli nntpclient.NNTPClientInterface) (*Server, error) {
-	t := template.New("base")
+	t := template.New("base").Funcs(template.FuncMap{
+		"dict": func(values ...interface{}) (map[string]interface{}, error) {
+			if len(values)%2 != 0 {
+				return nil, errors.New("dict expects an even number of arguments for key-value pairs")
+			}
+			m := make(map[string]interface{}, len(values)/2)
+			for i := 0; i < len(values); i += 2 {
+				key, ok := values[i].(string)
+				if !ok {
+					return nil, errors.New("dict keys must be strings")
+				}
+				m[key] = values[i+1]
+			}
+			return m, nil
+		},
+	})
 	parsedTemplates, err := t.ParseFS(templates.Files, "*.html.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse templates: %w", err)

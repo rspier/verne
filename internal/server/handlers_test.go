@@ -1,13 +1,11 @@
 package server
 
 import (
-	// "bytes" // No longer used
 	"database/sql" // For sql.ErrNoRows
-	// "errors" // No longer used
+	"errors"       // For dict func in newTestServer & other error handling
 	"fmt"
 	htmltemplate "html/template"
 	"io"
-	// "log" // No longer used directly in this file after removing log.SetOutput
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -20,7 +18,6 @@ import (
 	"nntp-web/internal/database"
 	"nntp-web/internal/nntpclient"
 	"nntp-web/web/templates"
-	// "nntp-web/internal/models"
 
 	// External test libraries
 	"github.com/DATA-DOG/go-sqlmock"
@@ -51,11 +48,27 @@ var articleColsWithGroup = append(articleColsNoGroup, "group_name")
 
 func newTestServer(t *testing.T, mockDb *database.DB, mockNntp nntpclient.NNTPClientInterface) *Server {
 	t.Helper()
-	parsedTemplates, err := htmltemplate.New("test").ParseFS(templates.Files, "*.html.tmpl")
+	templateFuncs := htmltemplate.FuncMap{
+		"dict": func(values ...interface{}) (map[string]interface{}, error) {
+			if len(values)%2 != 0 {
+				return nil, errors.New("dict expects an even number of arguments for key-value pairs")
+			}
+			m := make(map[string]interface{}, len(values)/2)
+			for i := 0; i < len(values); i += 2 {
+				key, ok := values[i].(string)
+				if !ok {
+					return nil, errors.New("dict keys must be strings")
+				}
+				m[key] = values[i+1]
+			}
+			return m, nil
+		},
+	}
+	parsedTemplates, err := htmltemplate.New("test").Funcs(templateFuncs).ParseFS(templates.Files, "*.html.tmpl")
 	if err != nil {
 		t.Fatalf("Failed to parse templates: %v", err)
 	}
-	cfg := &config.Config{ServerPort: 8080, CacheTTLSeconds: 1}
+	cfg := &config.Config{ServerPort: 8080, CacheTTLSeconds: 1} // Example config
 	return &Server{
 		config:     cfg,
 		db:         mockDb,

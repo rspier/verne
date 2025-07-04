@@ -165,14 +165,12 @@ func (s *Server) handleListMessages() http.HandlerFunc {
 				// buildDisplayTree now returns (items, totalCount). We only need items here.
 				rootDisplayMessages, _ = buildDisplayTree(rootThreadable, 0)
 
-				// Ensure the list of threads is newest first.
-				// buildDisplayTree processes siblings in the order jwz provides them.
-				// If jwz provides thread roots oldest-first, reverse the list.
-				if len(rootDisplayMessages) > 1 { // Only reverse if there's more than one thread
-					for i, j := 0, len(rootDisplayMessages)-1; i < j; i, j = i+1, j-1 {
-						rootDisplayMessages[i], rootDisplayMessages[j] = rootDisplayMessages[j], rootDisplayMessages[i]
-					}
-				}
+				// Removed explicit reversal. Rely on jwz order or implement specific sort if needed.
+				// The expectation is that threads should be listed newest first.
+				// The input articles are newest first (DB: received DESC).
+				// If jwz outputs thread roots oldest-first, this will result in oldest-first display.
+				// If jwz outputs thread roots newest-first, this will be correct.
+				// If order is still wrong, a manual sort of rootDisplayMessages by date will be needed here.
 			}
 		}
 

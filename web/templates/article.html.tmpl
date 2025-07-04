@@ -27,12 +27,13 @@
     </style>
 
 {{/* Define the recursive template for thread nodes */}}
+{{/* Context for this template will be a dictionary: {"Node": DisplayThreadItem, "MainArticleID": string} */}}
 {{define "threadNode"}}
     <li class="thread-item">
-        {{ $adapter := .Message }}     {{/* .Message is a *jwzArticleAdapter */}}
+        {{ $adapter := .Node.Message }}     {{/* .Node is the DisplayThreadItem from the dict */}}
         {{ $articleInLoop := $adapter.Article }} {{/* Access the named 'Article' field */}}
         <div class="thread-item-subject">
-            {{if eq $articleInLoop.MessageID $.Article.MessageID}}
+            {{if eq $articleInLoop.MessageID .MainArticleID}} {{/* .MainArticleID from the dict */}}
                 <strong><a href="/group/{{$articleInLoop.GroupName}}/{{$articleInLoop.Received.Year}}/{{printf "%02d" $articleInLoop.Received.Month}}/msg{{$articleInLoop.ArticleNum}}.html">{{$articleInLoop.Subject}}</a></strong>
             {{else}}
                 <a href="/group/{{$articleInLoop.GroupName}}/{{$articleInLoop.Received.Year}}/{{printf "%02d" $articleInLoop.Received.Month}}/msg{{$articleInLoop.ArticleNum}}.html">{{$articleInLoop.Subject}}</a>
@@ -41,10 +42,11 @@
         <div class="thread-item-meta">
             From: {{$articleInLoop.DisplayFrom}} | Date: {{$articleInLoop.Date}}
         </div>
-        {{if .Children}}
+        {{if .Node.Children}} {{/* Access Children from .Node */}}
             <ul class="thread-list-nested"> {{/* Nested list for children */}}
-                {{range .Children}}
-                    {{template "threadNode" .}}
+                {{range .Node.Children}}
+                    {{/* Recursively call, passing the same MainArticleID down */}}
+                    {{template "threadNode" (dict "Node" . "MainArticleID" $.MainArticleID)}}
                 {{end}}
             </ul>
         {{end}}
@@ -99,7 +101,8 @@
                 <h2>Other Messages in This Thread</h2>
                 <ul class="thread-list"> {{/* Main list for top-level thread items */}}
                     {{range .ArticleThreadTree}}
-                        {{template "threadNode" .}}
+                        {{/* Pass the current node and the main article's ID to the partial */}}
+                        {{template "threadNode" (dict "Node" . "MainArticleID" $.Article.MessageID)}}
                     {{end}}
                 </ul>
             </div>
