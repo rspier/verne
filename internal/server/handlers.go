@@ -260,15 +260,18 @@ func (s *Server) handleShowArticle() http.HandlerFunc {
 		log.Printf("handleShowArticle: Path='%s', RawQuery='%s', Final ExtractedMsgID='%s', Parts='%v'", path, r.URL.RawQuery, msgIDVal, parts)
 
 		if msgIDVal != "" {
-			log.Printf("handleShowArticle: Attempting to fetch by Message-ID: '%s' (group hint: '%s')", msgIDVal, groupNameFromPath)
-			article, err = s.db.GetArticleByMessageID(msgIDVal)
+			// Wrap the raw msgIDVal with angle brackets for database lookup,
+			// as the DB stores Message-IDs with them.
+			fullMsgIDWithBrackets := fmt.Sprintf("<%s>", msgIDVal)
+			log.Printf("handleShowArticle: Attempting to fetch by Message-ID: '%s' (raw extracted: '%s', group hint: '%s')", fullMsgIDWithBrackets, msgIDVal, groupNameFromPath)
+			article, err = s.db.GetArticleByMessageID(fullMsgIDWithBrackets) // Use the ID with brackets
 			if err != nil {
-				log.Printf("Error fetching article by Message-ID '%s': %v", msgIDVal, err)
+				log.Printf("Error fetching article by Message-ID '%s': %v", fullMsgIDWithBrackets, err)
 				http.Error(w, "Failed to retrieve article by Message-ID", http.StatusNotFound)
 				return
 			}
 			if article == nil {
-				log.Printf("Article not found for Message-ID: %s", msgIDVal)
+				log.Printf("Article not found for Message-ID: %s", fullMsgIDWithBrackets)
 				http.NotFound(w, r)
 				return
 			}

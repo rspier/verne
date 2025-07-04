@@ -139,11 +139,14 @@ func TestServer_handleShowArticle(t *testing.T) {
 		},
 		{
 			name: "msgid lookup - success and redirect",
-			path: fmt.Sprintf("/group/%s/?msgid=%s", groupName, msgID),
+			path: fmt.Sprintf("/group/%s/?msgid=%s", groupName, msgID), // msgID is raw here
 			setupDbMockFn: func(dbMock sqlmock.Sqlmock) {
-				dbMock.ExpectQuery(articleByMsgIDQueryRgx).WithArgs(msgID).
+				// Expect GetArticleByMessageID to be called with the Message-ID wrapped in angle brackets
+				expectedMsgIDWithBrackets := fmt.Sprintf("<%s>", msgID)
+				dbMock.ExpectQuery(articleByMsgIDQueryRgx).WithArgs(expectedMsgIDWithBrackets).
 					WillReturnRows(sqlmock.NewRows(articleColsWithGroup).
-						AddRow(groupID, articleNum, msgID, "Test Subject", "Test From", mockArticleDateStr, sampleReceived, threadID, 0, "", 10, 100, groupName))
+						// The h_messageid column in DB stores it with brackets
+						AddRow(groupID, articleNum, expectedMsgIDWithBrackets, "Test Subject", "Test From", mockArticleDateStr, sampleReceived, threadID, 0, "", 10, 100, groupName))
 			},
 			setupNntpMockFn:      func(nntpMock *MockNNTPClient) { /* No NNTP call */ },
 			expectedStatusCode:   http.StatusFound,
