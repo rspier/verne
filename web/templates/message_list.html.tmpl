@@ -63,7 +63,7 @@
                     </div>
                     <div class="message-meta">
                         From: <span class="message-from">{{$article.DisplayFrom}}</span> |
-                        Date: {{$article.Date}} |
+                        Date: {{$adapter.ParsedDate.Format "2006-01-02 15:04:05 UTC"}} |
                         Thread: {{.MessagesInSubThreadCount}} {{if gt .MessagesInSubThreadCount 1}}messages{{else}}message{{end}}
                         {{/* Removed Thread Root ID display: <span class="message-id-debug">(Thread Root ID: {{$article.MessageID}})</span> */}}
                     </div>

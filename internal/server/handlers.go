@@ -399,8 +399,19 @@ func (s *Server) handleShowArticle() http.HandlerFunc {
 			articleContentHTML = template.HTML(parsedContent)
 		}
 
+		// Prepare main article's date for display in UTC
+		var displayDateUTC string
+		parsedArticleHeaderDate, errParseDate := mail.ParseDate(article.Date)
+		if errParseDate != nil {
+			log.Printf("Warning: Could not parse main article date string '%s' for UTC display: %v. Using original string.", article.Date, errParseDate)
+			displayDateUTC = article.Date // Fallback to original string
+		} else {
+			displayDateUTC = parsedArticleHeaderDate.UTC().Format("2006-01-02 15:04:05 UTC")
+		}
+
 		data := map[string]interface{}{
 			"Article":            article,
+			"DisplayDateUTC":     displayDateUTC, // Formatted UTC date string for main article
 			"ArticleContent":     parsedContent,
 			"ArticleContentHTML": articleContentHTML,
 			"IsHTMLContent":      isHTML,

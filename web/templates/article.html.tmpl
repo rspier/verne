@@ -40,7 +40,7 @@
             {{end}}
         </div>
         <div class="thread-item-meta">
-            From: {{$articleInLoop.DisplayFrom}} | Date: {{$articleInLoop.Date}}
+            From: {{$articleInLoop.DisplayFrom}} | Date: {{$adapter.ParsedDate.Format "2006-01-02 15:04:05 UTC"}}
         </div>
         {{if .Node.Children}} {{/* Access Children from .Node */}}
             <ul class="thread-list-nested"> {{/* Nested list for children */}}
@@ -74,7 +74,7 @@
                 <h1>{{.Article.Subject}}</h1>
                 <ul class="article-meta">
                     <li><strong>From:</strong> {{.Article.DisplayFrom}}</li>
-                    <li><strong>Date:</strong> {{.Article.Date}}</li>
+                    <li><strong>Date:</strong> {{.DisplayDateUTC}}</li> {{/* Use the formatted UTC date */}}
                     <li><strong>Message-ID:</strong>
                         <a href="/group/{{.Article.GroupName}}/;.msgid={{.Article.MessageID}}"><code>&lt;{{.Article.MessageID}}&gt;</code></a>
                     </li>
