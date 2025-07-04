@@ -68,7 +68,7 @@
         <li class="message-item thread-level-{{.Depth}}">
             <div class="message-subject">
                 {{$article := .Message.Article}} {{/* Access the embedded models.Article directly */}}
-                <a href="/group/{{$article.GroupName}}/{{$.CurrentYear}}/{{printf "%02d" $.CurrentMonth}}/msg{{$article.ArticleNum}}.html">{{$article.Subject}}</a>
+                <a href="#">{{$article.Subject}}</a> {{/* Temporarily simplified href */}}
             </div>
             <div class="message-meta">
                 {{$article := .Message.Article}} {{/* Access again for this scope */}}

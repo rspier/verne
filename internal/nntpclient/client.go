@@ -19,7 +19,7 @@ type Client struct {
 
 // connect establishes a new connection to the NNTP server and performs handshake.
 func (c *Client) connect() error {
-	if c.cfg.NNTPServer == "" { // Should have been checked by NewClient, but good for internal method too
+	if c.cfg.NNTPServer == "" {
 		return fmt.Errorf("nntp: server address is not configured for connect")
 	}
 
@@ -70,7 +70,7 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	}
 	client := &Client{cfg: cfg}
 	if err := client.connect(); err != nil {
-		return nil, err // connect() already logs and wraps errors
+		return nil, err
 	}
 	return client, nil
 }
@@ -79,23 +79,17 @@ func isNetworkError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Check for common network error types or substrings
-	// This list can be expanded. textproto.Error might wrap net.OpError.
-	// io.EOF can also indicate a closed connection.
 	s := err.Error()
 	if strings.Contains(s, "broken pipe") ||
 		strings.Contains(s, "connection reset by peer") ||
 		strings.Contains(s, "network is unreachable") ||
 		strings.Contains(s, "no such host") ||
 		strings.Contains(s, "connection refused") ||
-		err == bufio.ErrBufferFull || // Could happen if reader buffer is an issue with dead conn
-		err.Error() == "EOF" { // For io.EOF
+		err.Error() == "EOF" {
 		return true
 	}
-	// TODO: Could also use errors.As to check for net.Error and check Temporary() or Timeout()
 	return false
 }
-
 
 // FetchRawArticle fetches the raw article content (headers + body) using its article number within a group.
 // It will attempt to reconnect and retry once if a network error is detected.
@@ -113,8 +107,7 @@ func (c *Client) FetchRawArticle(groupName string, articleNum uint32) ([]byte, e
 			log.Println("NNTP: Connection is nil, attempting to connect...")
 			err = c.connect()
 			if err != nil {
-				// Wrap error from connect() which already has context
-				return nil, fmt.Errorf("nntp: initial connect call failed: %w", err) // This one is correct: returns nil for []byte
+				return nil, fmt.Errorf("nntp: initial connect call failed: %w", err)
 			}
 		}
 
@@ -130,41 +123,39 @@ func (c *Client) FetchRawArticle(groupName string, articleNum uint32) ([]byte, e
 			c.Close()
 			if connectErr := c.connect(); connectErr != nil {
 				log.Printf("NNTP: Reconnect failed: %v", connectErr)
-				// This return is for the outer FetchRawArticle, ensure it's nil for []byte
 				return nil, fmt.Errorf("nntp: reconnect failed after network error: %w (original error: %v)", connectErr, err)
 			}
 			log.Println("NNTP: Reconnect successful, retrying command.")
 		} else {
-			// Non-network error, don't retry. This return is for the outer FetchRawArticle.
 			return nil, err
 		}
 	}
-	// This is the final return after retries exhausted. Ensure it's nil for []byte.
 	return nil, fmt.Errorf("nntp: failed to fetch raw article for group %s, article %d after retry: %w", groupName, articleNum, err)
 }
 
-
 // fetchRawArticleAttempt contains the actual logic for fetching a raw article (headers + body) by article number.
 func (c *Client) fetchRawArticleAttempt(groupName string, articleNum uint32) ([]byte, error) {
-	// This function assumes c.conn is not nil.
+	if c.conn == nil { // Should not happen if FetchRawArticle calls it correctly
+		return nil, fmt.Errorf("nntp: fetchRawArticleAttempt called with nil connection")
+	}
 
 	// 1. Select the group
 	cmdID, err := c.conn.Cmd("GROUP %s", groupName)
 	if err != nil {
-		return "", fmt.Errorf("nntp: GROUP %s command failed: %w", groupName, err)
+		return nil, fmt.Errorf("nntp: GROUP %s command failed: %w", groupName, err)
 	}
 	c.conn.StartResponse(cmdID)
 	groupResp, err := c.reader.ReadString('\n')
 	c.conn.EndResponse(cmdID)
 	if err != nil {
-		return "", fmt.Errorf("nntp: failed to read response for GROUP %s: %w", groupName, err)
+		return nil, fmt.Errorf("nntp: failed to read response for GROUP %s: %w", groupName, err)
 	}
 	if !strings.HasPrefix(groupResp, "211") { // 211 group selected
-		return "", fmt.Errorf("nntp: failed to select group %s: %s", groupName, strings.TrimSpace(groupResp))
+		return nil, fmt.Errorf("nntp: failed to select group %s: %s", groupName, strings.TrimSpace(groupResp))
 	}
 
 	// 2. Fetch raw article by article number using ARTICLE command
-	cmdID, err = c.conn.Cmd("ARTICLE %d", articleNum) // Use articleNum directly
+	cmdID, err = c.conn.Cmd("ARTICLE %d", articleNum)
 	if err != nil {
 		return nil, fmt.Errorf("nntp: ARTICLE %d command failed: %w", articleNum, err)
 	}
@@ -183,31 +174,32 @@ func (c *Client) fetchRawArticleAttempt(groupName string, articleNum uint32) ([]
 		return nil, fmt.Errorf("nntp: unexpected response for ARTICLE %d in group %s: %s", articleNum, groupName, strings.TrimSpace(statusLine))
 	}
 
-	// Read the rest of the article (headers and body) until the terminating dot.
-	rawArticleBytes, err := c.conn.Reader.ReadDotBytes()
+	rawArticleData, err := c.conn.Reader.ReadDotBytes()
 	if err != nil {
 		return nil, fmt.Errorf("nntp: error reading raw article content for article %d in group %s: %w", articleNum, groupName, err)
 	}
 
-	return rawArticleBytes, nil
+	return rawArticleData, nil
 }
-
 
 // Close disconnects the NNTP client.
 func (c *Client) Close() error {
 	if c.conn != nil {
 		log.Println("NNTP Client closing connection.")
-		// Capture both id and err from conn.Cmd
 		quitCmdID, err := c.conn.Cmd("QUIT")
 		if err == nil {
 			c.conn.StartResponse(quitCmdID)
-			quitResp, _ := c.reader.ReadString('\n')
+			quitResp, _ := c.reader.ReadString('\n') // Error reading QUIT response is logged but not fatal to Close()
 			c.conn.EndResponse(quitCmdID)
 			log.Printf("NNTP QUIT response: %s", strings.TrimSpace(quitResp))
 		} else {
 			log.Printf("NNTP: Sending QUIT command failed: %v", err)
 		}
-		return c.conn.Close()
+
+		errClose := c.conn.Close()
+		c.conn = nil // Ensure connection is marked as closed
+		c.reader = nil
+		return errClose
 	}
 	return nil
 }
