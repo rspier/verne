@@ -164,6 +164,15 @@ func (s *Server) handleListMessages() http.HandlerFunc {
 			} else if rootThreadable != nil {
 				// buildDisplayTree now returns (items, totalCount). We only need items here.
 				rootDisplayMessages, _ = buildDisplayTree(rootThreadable, 0)
+
+				// Ensure the list of threads is newest first.
+				// buildDisplayTree processes siblings in the order jwz provides them.
+				// If jwz provides thread roots oldest-first, reverse the list.
+				if len(rootDisplayMessages) > 1 { // Only reverse if there's more than one thread
+					for i, j := 0, len(rootDisplayMessages)-1; i < j; i, j = i+1, j-1 {
+						rootDisplayMessages[i], rootDisplayMessages[j] = rootDisplayMessages[j], rootDisplayMessages[i]
+					}
+				}
 			}
 		}
 
@@ -304,7 +313,9 @@ func (s *Server) handleShowArticle() http.HandlerFunc {
 		isHTML := parsedResult.IsHTML
 		otherPartsExist := parsedResult.OtherPartsExist
 
-		threadMessages, err := s.db.GetThreadMessages(article.ThreadID, article.GroupID, article.ArticleNum)
+		// Fetch all messages in the thread, including the current one.
+		// GetThreadMessages signature changed: no longer needs currentArticleGroupID, currentArticleNum
+		threadMessages, err := s.db.GetThreadMessages(article.ThreadID)
 		if err != nil {
 			log.Printf("Error fetching thread messages for article %s/msg%d (threadID %d): %v", article.GroupName, article.ArticleNum, article.ThreadID, err)
 			threadMessages = []models.Article{}

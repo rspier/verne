@@ -30,12 +30,16 @@
 {{define "threadNode"}}
     <li class="thread-item">
         {{ $adapter := .Message }}     {{/* .Message is a *jwzArticleAdapter */}}
-        {{ $article := $adapter.Article }} {{/* Access the named 'Article' field */}}
+        {{ $articleInLoop := $adapter.Article }} {{/* Access the named 'Article' field */}}
         <div class="thread-item-subject">
-            <a href="/group/{{$article.GroupName}}/{{$article.Received.Year}}/{{printf "%02d" $article.Received.Month}}/msg{{$article.ArticleNum}}.html">{{$article.Subject}}</a>
+            {{if eq $articleInLoop.MessageID $.Article.MessageID}}
+                <strong><a href="/group/{{$articleInLoop.GroupName}}/{{$articleInLoop.Received.Year}}/{{printf "%02d" $articleInLoop.Received.Month}}/msg{{$articleInLoop.ArticleNum}}.html">{{$articleInLoop.Subject}}</a></strong>
+            {{else}}
+                <a href="/group/{{$articleInLoop.GroupName}}/{{$articleInLoop.Received.Year}}/{{printf "%02d" $articleInLoop.Received.Month}}/msg{{$articleInLoop.ArticleNum}}.html">{{$articleInLoop.Subject}}</a>
+            {{end}}
         </div>
         <div class="thread-item-meta">
-            From: {{$article.DisplayFrom}} | Date: {{$article.Date}}
+            From: {{$articleInLoop.DisplayFrom}} | Date: {{$articleInLoop.Date}}
         </div>
         {{if .Children}}
             <ul class="thread-list-nested"> {{/* Nested list for children */}}

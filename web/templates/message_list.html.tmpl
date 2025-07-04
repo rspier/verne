@@ -64,7 +64,7 @@
                         From: <span class="message-from">{{$article.DisplayFrom}}</span> |
                         Date: {{$article.Date}} |
                         Thread: {{.MessagesInSubThreadCount}} {{if gt .MessagesInSubThreadCount 1}}messages{{else}}message{{end}}
-                        <span class="message-id-debug">(Thread Root ID: {{$article.MessageID}})</span>
+                        {{/* Removed Thread Root ID display: <span class="message-id-debug">(Thread Root ID: {{$article.MessageID}})</span> */}}
                     </div>
                     {{/* No recursive rendering of children here */}}
                 </li>

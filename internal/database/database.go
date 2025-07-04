@@ -568,31 +568,32 @@ func (db *DB) GetArticleByMessageID(messageIDVal string) (*models.Article, error
 	return &article, nil
 }
 
-// GetThreadMessages retrieves all messages in the same thread as a given article,
-// excluding the article itself. Articles are ordered by their received date.
-// It also populates the Article.GroupName field. It uses a cache.
-func (db *DB) GetThreadMessages(threadID uint32, currentArticleGroupID uint16, currentArticleNum uint32) ([]models.Article, error) {
-	cacheKey := fmt.Sprintf("threadmsgs:%d:%d-%d", threadID, currentArticleGroupID, currentArticleNum)
+// GetThreadMessages retrieves all messages in the same thread.
+// It includes the article that might be the "current" one if it's part of the thread.
+// Articles are ordered by their received date. It also populates the Article.GroupName field. It uses a cache.
+func (db *DB) GetThreadMessages(threadID uint32) ([]models.Article, error) { // currentArticleGroupID and currentArticleNum removed
+	// Cache key updated to reflect fetching the full thread for a given threadID
+	cacheKey := fmt.Sprintf("threadmsgs:full:%d", threadID)
 	if db.cache != nil {
 		if cached, found := db.cache.Get(cacheKey); found {
 			if articles, ok := cached.([]models.Article); ok {
-				log.Printf("Cache hit for GetThreadMessages: %s", cacheKey)
+				log.Printf("Cache hit for GetThreadMessages (full thread): %s", cacheKey)
 				return articles, nil
 			}
 		}
 	}
-	log.Printf("Cache miss for GetThreadMessages: %s, querying DB", cacheKey)
+	log.Printf("Cache miss for GetThreadMessages (full thread): %s, querying DB", cacheKey)
 
 	query := `
 		SELECT a.group_id, a.id, a.h_messageid, a.h_subject, a.h_from, a.h_date,
 		       a.received, a.thread_id, a.parent, a.h_references, a.h_lines, a.h_bytes,
 		       g.name as group_name
 		FROM articles a
-		JOIN ` + "`groups`" + ` g ON a.group_id = g.id
-		WHERE a.thread_id = ? AND NOT (a.group_id = ? AND a.id = ?)
+		JOIN ` + "`groups` g ON a.group_id = g.id" + `
+		WHERE a.thread_id = ?
 		ORDER BY a.received ASC, a.id ASC` // Order by date, then by article number for tie-breaking
 
-	rows, err := db.sqlDB.Query(query, threadID, currentArticleGroupID, currentArticleNum)
+	rows, err := db.sqlDB.Query(query, threadID) // currentArticleGroupID and currentArticleNum removed from query parameters
 	if err != nil {
 		return nil, fmt.Errorf("failed to query thread messages for thread_id %d: %w", threadID, err)
 	}
