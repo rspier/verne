@@ -148,11 +148,11 @@
 
             <div class="article-body">
                 {{if .IsHTMLContent}}
-                    {{.ArticleContent}}  {{/* This is pre-sanitized HTML */}}
+                    {{.ArticleContentHTML}}  {{/* Use the template.HTML version for HTML content */}}
                 {{else}}
-                    <pre>{{.ArticleContent}}</pre> {{/* Plain text content */}}
+                    <pre>{{.ArticleContent}}</pre> {{/* Plain text content (ArticleContent is also the plain string) */}}
                 {{end}}
-                {{if not .ArticleContent}}
+                {{if not .ArticleContent}} {{/* This check might need refinement if ArticleContentHTML can be empty for valid HTML*/}}
                      <p><em>No displayable message body found or an error occurred fetching content.</em></p>
                 {{end}}
             </div>
