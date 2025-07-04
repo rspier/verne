@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Messages in {{.GroupName}} - {{.CurrentYear}}/{{printf "%02d" .CurrentMonth}}</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        h1, h2 { color: #333; }
+        a { text-decoration: none; color: #007bff; }
+        a:hover { text-decoration: underline; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .message-list { list-style-type: none; padding: 0; }
+        .message-item { border-bottom: 1px solid #eee; padding: 10px 0; }
+        .message-item:last-child { border-bottom: none; }
+        .message-subject a { font-weight: bold; font-size: 1.1em; }
+        .message-meta { font-size: 0.9em; color: #555; margin-top: 5px; }
+        .message-from { font-style: italic; }
+        .navigation { margin-top: 20px; display: flex; justify-content: space-between; }
+        .no-messages { color: #777; }
+        .breadcrumb { margin-bottom: 20px; font-size: 0.9em; }
+        .breadcrumb a { color: #007bff; }
+        .thread-root { padding-left: 0; }
+        .thread-children { list-style-type: none; padding-left: 25px; /* Indentation for children */ }
+        .thread-level-0 { /* Style for root messages if needed */ }
+        .thread-item .message-id-debug {font-size: 0.75em; color: #aaa; margin-left: 10px;}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="breadcrumb">
+            <a href="/group/">All Groups</a> &gt; {{.GroupName}}
+        </div>
+
+        <h1>{{.GroupName}}</h1>
+        <h2>Messages for {{.CurrentYear}}-{{printf "%02d" .CurrentMonth}}</h2>
+
+        <div class="navigation">
+            {{if .PrevMonthFound}}
+                <a href="/group/{{.GroupName}}/{{.PrevYear}}/{{printf "%02d" .PrevMonth}}.html">&laquo; Previous Month ({{.PrevYear}}-{{printf "%02d" .PrevMonth}})</a>
+            {{else}}
+                <span>&laquo; Previous Month</span>
+            {{end}}
+
+            {{if .NextMonthFound}}
+                <a href="/group/{{.GroupName}}/{{.NextYear}}/{{printf "%02d" .NextMonth}}.html">Next Month ({{.NextYear}}-{{printf "%02d" .NextMonth}}) &raquo;</a>
+            {{else}}
+                <span>Next Month &raquo;</span>
+            {{end}}
+        </div>
+
+        {{if .ThreadedMessages}}
+            <ul class="message-list thread-root">
+                {{range .ThreadedMessages}}
+                    {{template "messageThread" .}}
+                {{end}}
+            </ul>
+        {{else}}
+            <p class="no-messages">No messages found for this month.</p>
+        {{end}}
+
+        {{/* Define the recursive template for displaying a thread */}}
+        {{define "messageThread"}}
+        {{/* . (dot) here is a *jwz.ThreadableArticle */}}
+        {{/* .Depth is the depth of the current message in the thread */}}
+        {{/* .Message is our *jwzArticleAdapter */}}
+        {{/* .Message.Article is our *models.Article */}}
+        <li class="message-item thread-level-{{.Depth}}">
+            <div class="message-subject">
+                {{$article := .Message.Article}} {{/* Access the embedded models.Article directly */}}
+                <a href="/group/{{$article.GroupName}}/{{$.CurrentYear}}/{{printf "%02d" $.CurrentMonth}}/msg{{$article.ArticleNum}}.html">{{$article.Subject}}</a>
+            </div>
+            <div class="message-meta">
+                {{$article := .Message.Article}} {{/* Access again for this scope */}}
+                From: <span class="message-from">{{$article.DisplayFrom}}</span> | Date: {{$article.Date}}
+                <span class="message-id-debug">(ID: {{$article.MessageID}})</span>
+            </div>
+            {{if .Children}}
+                <ul class="thread-children">
+                    {{range .Children}}
+                        {{template "messageThread" .}}
+                    {{end}}
+                </ul>
+            {{end}}
+        </li>
+        {{end}}
+
+        <div class="navigation" style="margin-top: 30px;">
+            {{if .PrevMonthFound}}
+                <a href="/group/{{.GroupName}}/{{.PrevYear}}/{{printf "%02d" .PrevMonth}}.html">&laquo; Previous Month ({{.PrevYear}}-{{printf "%02d" .PrevMonth}})</a>
+            {{else}}
+                <span>&laquo; Previous Month</span>
+            {{end}}
+
+            {{if .NextMonthFound}}
+                <a href="/group/{{.GroupName}}/{{.NextYear}}/{{printf "%02d" .NextMonth}}.html">Next Month ({{.NextYear}}-{{printf "%02d" .NextMonth}}) &raquo;</a>
+            {{else}}
+                <span>Next Month &raquo;</span>
+            {{end}}
+        </div>
+         <p style="margin-top: 20px;"><a href="/group/">Back to All Groups</a></p>
+    </div>
+
+    {{if .Error}}
+    <p style="color: red;">Error: {{.Error}}</p>
+    {{end}}
+</body>
+</html>
+```
