@@ -234,21 +234,13 @@ func TestServer_RouteGroupRequests(t *testing.T) {
 			path: "/group/",
 			setupDbMockFn: func(dbMock sqlmock.Sqlmock) {
 				// Rows now need to include max_received_date (can be nil for sql.NullTime)
-				mockTimeRecent := time.Now()
-				// "alt.test" (ID 1) - Inactive or Slow (no recent post)
-				// "comp.lang.go" (ID 2) - Active (recent post)
 				rows := sqlmock.NewRows([]string{"id", "name", "description", "max_received_date"}).
-					AddRow(1, "alt.test", "Test group", nil).
-					AddRow(2, "comp.lang.go", "Go Language", mockTimeRecent)
+					AddRow(1, "alt.test", "Test group", nil). // Example with nil last post date
+					AddRow(2, "comp.lang.go", "Go Language", time.Now()) // Example with a last post date
 				dbMock.ExpectQuery(expectedListGroupsSQLQuery).WillReturnRows(rows)
-
-				// Mock the GetGroupActivityStats call for the active group "comp.lang.go" (ID 2)
-				activityQueryRgx := regexp.QuoteMeta(`SELECT COUNT(*) FROM articles WHERE group_id = ? AND received >= DATE_SUB(NOW(), INTERVAL ? DAY)`)
-				// Assuming activityLookbackDays = 30 in handler
-				dbMock.ExpectQuery(activityQueryRgx).WithArgs(uint16(2), 30).WillReturnRows(sqlmock.NewRows([]string{"COUNT(*)"}).AddRow(15)) // e.g., 15 posts
 			},
 			expectedStatusCode: http.StatusOK,
-			expectedBody:       []string{"alt.test", "comp.lang.go", "Active Lists", "Avg Posts/Day"}, // Check for new structure elements
+			expectedBody:       []string{"alt.test", "Go Language"},
 		},
 	}
 

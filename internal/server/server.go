@@ -78,29 +78,13 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		// Apache log time format: 02/Jan/2006:15:04:05 -0700
 		logTime := startTime.Format("02/Jan/2006:15:04:05 -0700")
 
-		// Determine client IP: X-Forwarded-For > RemoteAddr
-		clientIP := r.Header.Get("X-Forwarded-For")
-		if clientIP != "" {
-			// X-Forwarded-For can be a comma-separated list (e.g., client, proxy1, proxy2)
-			// The first IP is the original client.
-			if commaIndex := strings.Index(clientIP, ","); commaIndex != -1 {
-				clientIP = clientIP[:commaIndex]
-			}
-			clientIP = strings.TrimSpace(clientIP)
-		} else {
-			clientIP = r.RemoteAddr
-			// Strip port from RemoteAddr if present (e.g., "127.0.0.1:12345")
-			if colonPos := strings.LastIndex(clientIP, ":"); colonPos != -1 {
-				// Check if it's an IPv6 address like [::1]:12345
-				if strings.HasPrefix(clientIP, "[") && strings.Contains(clientIP, "]:") {
-					// Keep the brackets for IPv6, strip only port
-					clientIP = strings.Split(clientIP, "]:")[0] + "]"
-				} else if !strings.Contains(clientIP, ":") || strings.LastIndex(clientIP, ":") > strings.LastIndex(clientIP, ".") {
-                    // Simple IPv4:port or IPv6 without brackets (less common for RemoteAddr)
-					clientIP = clientIP[:colonPos]
-				}
-			}
+		// Use RemoteAddr, but consider X-Forwarded-For if behind a proxy.
+		// For simplicity, using RemoteAddr directly here.
+		clientIP := r.RemoteAddr
+		if colonPos := strings.LastIndex(clientIP, ":"); colonPos != -1 {
+			clientIP = clientIP[:colonPos] // Strip port if present (common for RemoteAddr)
 		}
+
 
 		webLogger.Printf("%s - %s [%s] \"%s %s %s\" %d %d \"%s\" \"%s\" %dms",
 			clientIP,
@@ -115,20 +99,6 @@ func loggingMiddleware(next http.Handler) http.Handler {
 			userAgent,
 			duration.Milliseconds(),
 		)
-	})
-}
-
-func (s *Server) cacheControlMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.config.NoCacheControl {
-			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate, private, max-age=0")
-			w.Header().Set("Pragma", "no-cache") // For HTTP/1.0 compatibility
-			w.Header().Set("Expires", "0")       // For proxies
-		} else {
-			// Cache for 12 hours
-			w.Header().Set("Cache-Control", "public, max-age=43200")
-		}
-		next.ServeHTTP(w, r)
 	})
 }
 
@@ -354,13 +324,10 @@ func (s *Server) ListenAndServe() error {
 	// Standard logger (STDERR) for this startup message
 	log.Printf("Server listening on http://localhost%s", addr)
 
-	var handler http.Handler = s.router
-	// Apply middlewares: logging first, then cache control.
-	// The request goes through cacheControl -> logging -> router.
-	// The response goes router -> logging -> cacheControl.
-	handler = s.cacheControlMiddleware(loggingMiddleware(handler))
+	// Wrap the main router with the logging middleware
+	loggedRouter := loggingMiddleware(s.router)
 
-	return http.ListenAndServe(addr, handler)
+	return http.ListenAndServe(addr, loggedRouter) // Use the wrapped router
 }
 
 func (s *Server) renderTemplate(w http.ResponseWriter, r *http.Request, name string, data interface{}) {

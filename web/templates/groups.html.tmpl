@@ -16,15 +16,10 @@
         th { background-color: #f0f0f0; }
         .group-section { margin-bottom: 30px; }
         .group-name { font-weight: bold; }
-        /* Adjusted column widths after removing Description column */
-        .col-name { width: 50%; }
-        /* .col-description rule removed */
-        .col-last-post { width: 25%; }
-        .col-avg-posts { width: 25%; } /* This applies to the table that has this column */
-
-        /* Specific widths for tables with only Name and Last Post */
-        .table-name-lastpost .col-name { width: 65%; }
-        .table-name-lastpost .col-last-post { width: 35%; }
+        .col-name { width: 25%; }
+        .col-description { width: 45%; }
+        .col-last-post { width: 15%; }
+        .col-avg-posts { width: 15%; }
 
 
         /* Responsive adjustments */
@@ -45,31 +40,26 @@
             /* Further responsive table handling might be needed, e.g. horizontal scroll or card layout */
         }
          @media (max-width: 480px) {
-            /* .col-description display:none rule removed as column is gone */
-            .col-name { width: 60%; } /* General adjustment for smaller screens */
-            .col-last-post { width: 40%; }
-            .col-avg-posts { width: 40%; } /* Will only apply if present, adjust if needed */
-
-            /* For tables with only 2 columns on smallest screens */
-            .table-name-lastpost .col-name { width: 60%; }
-            .table-name-lastpost .col-last-post { width: 40%; }
-
+            .col-description { display: none; } /* Hide description on very small screens */
+            .col-name { width: 50%; }
+            .col-last-post { width: 25%; }
+            .col-avg-posts { width: 25%; }
              th, td { font-size: 0.85em; }
         }
     </style>
 </head>
 <body>
-    <h1>Available Lists</h1>
+    <h1>Available Newsgroups</h1>
 
     {{/* Active Groups Section */}}
     <div class="group-section">
-        <h2>Active Lists (posts in last month)</h2>
+        <h2>Active Newsgroups (posts in last month)</h2>
         {{if .ActiveGroups}}
             <table>
                 <thead>
                     <tr>
                         <th class="col-name">Name</th>
-                        {{/* <th class="col-description">Description</th> Removed */}}
+                        <th class="col-description">Description</th>
                         <th class="col-last-post">Last Post</th>
                         <th class="col-avg-posts">Avg Posts/Day (Last 30 Days)</th>
                     </tr>
@@ -78,7 +68,7 @@
                     {{range .ActiveGroups}}
                     <tr>
                         <td class="group-name"><a href="/group/{{.Name}}/">{{.Name}}</a></td>
-                        {{/* <td>{{.Description}}</td> Removed */}}
+                        <td>{{.Description}}</td>
                         <td>{{if .LastPostDate}}{{.LastPostDate.UTC.Format "2006-01"}}{{else}}-{{end}}</td>
                         <td>{{if .ShowAvgPosts}}{{printf "%.1f" .AvgPostsLastMonth}}{{else}}-{{end}}</td>
                     </tr>
@@ -86,19 +76,19 @@
                 </tbody>
             </table>
         {{else}}
-            <p class="no-groups">No lists with activity in the last month.</p>
+            <p class="no-groups">No groups with activity in the last month.</p>
         {{end}}
     </div>
 
     {{/* Slow Groups Section */}}
     <div class="group-section">
-        <h2>Slow Lists (posts in last year, but not last month)</h2>
+        <h2>Slow Newsgroups (posts in last year, but not last month)</h2>
         {{if .SlowGroups}}
-            <table class="table-name-lastpost">
+            <table>
                 <thead>
                     <tr>
                         <th class="col-name">Name</th>
-                        {{/* <th class="col-description">Description</th> Removed */}}
+                        <th class="col-description">Description</th>
                         <th class="col-last-post">Last Post</th>
                     </tr>
                 </thead>
@@ -106,26 +96,26 @@
                     {{range .SlowGroups}}
                     <tr>
                         <td class="group-name"><a href="/group/{{.Name}}/">{{.Name}}</a></td>
-                        {{/* <td>{{.Description}}</td> Removed */}}
+                        <td>{{.Description}}</td>
                         <td>{{if .LastPostDate}}{{.LastPostDate.UTC.Format "2006-01"}}{{else}}-{{end}}</td>
                     </tr>
                     {{end}}
                 </tbody>
             </table>
         {{else}}
-            <p class="no-groups">No lists with activity in the last year (excluding last month).</p>
+            <p class="no-groups">No groups with activity in the last year (excluding last month).</p>
         {{end}}
     </div>
 
     {{/* Inactive Groups Section */}}
     <div class="group-section">
-        <h2>Inactive Lists (no posts in over a year)</h2>
+        <h2>Inactive Newsgroups (no posts in over a year)</h2>
         {{if .InactiveGroups}}
-            <table class="table-name-lastpost">
+            <table>
                 <thead>
                     <tr>
                         <th class="col-name">Name</th>
-                        {{/* <th class="col-description">Description</th> Removed */}}
+                        <th class="col-description">Description</th>
                         <th class="col-last-post">Last Post</th>
                     </tr>
                 </thead>
@@ -133,14 +123,14 @@
                     {{range .InactiveGroups}}
                     <tr>
                         <td class="group-name"><a href="/group/{{.Name}}/">{{.Name}}</a></td>
-                        {{/* <td>{{.Description}}</td> Removed */}}
+                        <td>{{.Description}}</td>
                         <td>{{if .LastPostDate}}{{.LastPostDate.UTC.Format "2006-01"}}{{else}}-{{end}}</td>
                     </tr>
                     {{end}}
                 </tbody>
             </table>
         {{else}}
-            <p class="no-groups">No inactive lists found (or all lists have some activity).</p>
+            <p class="no-groups">No inactive groups found (or all groups have some activity).</p>
         {{end}}
     </div>
 
