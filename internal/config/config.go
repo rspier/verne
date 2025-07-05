@@ -19,6 +19,7 @@ type Config struct {
 	NNTPServer      string // Expected format: "host:port"
 	CacheTTLSeconds int    // Cache TTL in seconds
 	LogSQLQueries   bool   // For verbose SQL query logging
+	NoCacheControl  bool   // Disable Cache-Control headers for client-side caching
 }
 
 // Load parses command-line flags and environment variables to populate the Config struct.
@@ -38,6 +39,7 @@ func Load() (*Config, error) {
 	nntpServer := flag.String("nntp-server", "news.example.com:119", "NNTP server address (host:port) (env: NNTP_SERVER)")
 	cacheTTLSeconds := flag.Int("cache-ttl", 300, "Default cache TTL in seconds (e.g., 300 for 5 minutes) (env: CACHE_TTL)")
 	logSQLQueries := flag.Bool("log-sql", false, "Enable verbose logging of SQL queries (env: LOG_SQL)")
+	noCacheControl := flag.Bool("no-cache-control", false, "Disable client-side caching via Cache-Control headers (env: NO_CACHE_CONTROL)")
 
 	flag.Parse()
 
@@ -51,6 +53,7 @@ func Load() (*Config, error) {
 	cfg.NNTPServer = *nntpServer
 	cfg.CacheTTLSeconds = *cacheTTLSeconds
 	cfg.LogSQLQueries = *logSQLQueries
+	cfg.NoCacheControl = *noCacheControl
 
 	// Basic validation
 	if cfg.NNTPServer == "" {
