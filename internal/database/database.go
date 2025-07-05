@@ -9,9 +9,16 @@ import (
 	"nntp-web/internal/config"
 	"nntp-web/internal/models"
 	"nntp-web/internal/cache" // Added for cache
-	"strings"                 // Added
+	"strings" // Added
 
 	_ "github.com/go-sql-driver/mysql" // MySQL driver
+
+	"context" // Added for OTel
+	// "go.opentelemetry.io/contrib/instrumentation/database/sql/otelsql" // Commented out due to resolution issues
+	"go.opentelemetry.io/otel"                        // Added for OTel tracer
+	"go.opentelemetry.io/otel/attribute"              // Added for OTel attributes
+	"go.opentelemetry.io/otel/trace"                  // Added for trace.WithAttributes
+	// semconv "go.opentelemetry.io/otel/semconv/v1.21.0" // No longer used directly here after commenting out otelsql
 )
 
 // DB wraps the sql.DB connection pool and an optional cache.
@@ -35,27 +42,36 @@ func New(appCfg *config.Config, appCache *cache.Cache) (*DB, error) {
 
 	log.Printf("Connecting to database: %s@tcp(%s:%d)/%s", appCfg.DBUser, appCfg.DBHost, appCfg.DBPort, appCfg.DBName)
 
-	sqlDB, err := sql.Open("mysql", dsn)
+	var err error
+	var sqlDB *sql.DB
+
+	// Defaulting to standard sql.Open due to otelsql issues.
+	sqlDB, err = sql.Open("mysql", dsn)
+	if appCfg.OTelMetricsEnabled || appCfg.OTelExporterOTLPTracesEndpoint != "" {
+		log.Println("OTel is enabled, but database connection will use standard sql.Open due to otelsql package issues. Some DB metrics/spans may be missing.")
+	} else {
+		log.Println("Database connection using standard sql.Open (OTel disabled or otelsql issue).")
+	}
+
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database connection: %w", err)
 	}
 
-	// Configure connection pool settings (optional, but good practice)
 	sqlDB.SetMaxOpenConns(25)
 	sqlDB.SetMaxIdleConns(25)
 	sqlDB.SetConnMaxLifetime(5 * time.Minute)
 
-	// Verify the connection
 	if err = sqlDB.Ping(); err != nil {
-		sqlDB.Close() // Close the connection if ping fails
+		sqlDB.Close()
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
 	return &DB{
 		sqlDB:    sqlDB,
 		cache:    appCache,
-		cacheTTL: time.Duration(appCfg.CacheTTLSeconds) * time.Second, // Use appCfg here
-		cfg:      appCfg, // Store the config
+		cacheTTL: time.Duration(appCfg.CacheTTLSeconds) * time.Second,
+		cfg:      appCfg,
 	}, nil
 }
 
@@ -68,103 +84,113 @@ func (db *DB) Close() error {
 }
 
 // NewWithSQLDB is a constructor for testing purposes, allowing injection of a custom *sql.DB and config.
-// It also initializes a new cache with a default TTL for tests.
 func NewWithSQLDB(sqlDb *sql.DB, appCfg *config.Config) *DB {
 	testCache := cache.NewCache()
 	var ttl time.Duration
 	if appCfg != nil && appCfg.CacheTTLSeconds > 0 {
 		ttl = time.Duration(appCfg.CacheTTLSeconds) * time.Second
 	} else {
-		ttl = 1 * time.Minute // Default test TTL
+		ttl = 1 * time.Minute
 	}
 	return &DB{sqlDB: sqlDb, cache: testCache, cacheTTL: ttl, cfg: appCfg}
 }
 
-// GetAllNewsgroups retrieves all newsgroups from the database, ordered by name.
-// It uses a cache to store results.
-func (db *DB) GetAllNewsgroups() ([]models.Newsgroup, error) {
+func (db *DB) GetAllNewsgroups(ctx context.Context) ([]models.Newsgroup, error) {
+	_, span := otel.Tracer("nntp-web/internal/database").Start(ctx, "DB.GetAllNewsgroups")
+	defer span.End()
+
 	cacheKey := "newsgroups:all"
 	if db.cache != nil {
-		if cached, found := db.cache.Get(cacheKey); found {
+		if cached, found := db.cache.Get(ctx, cacheKey); found {
 			if groups, ok := cached.([]models.Newsgroup); ok {
 				log.Println("Cache hit for GetAllNewsgroups")
+				span.SetAttributes(attribute.Bool("cache.hit", true))
 				return groups, nil
 			}
-			log.Println("Cache data type mismatch for GetAllNewsgroups") // Should not happen if cache is used correctly
+			log.Println("Cache data type mismatch for GetAllNewsgroups")
 		}
 	}
 	log.Println("Cache miss for GetAllNewsgroups, querying DB")
+	span.SetAttributes(attribute.Bool("cache.hit", false))
 
 	query := `
-		SELECT
-			g.id, g.name, g.description,
-			last_post.max_received_date
-		FROM
-			` + "`groups`" + ` g
-		LEFT JOIN
-			(SELECT group_id, MAX(received) as max_received_date FROM articles GROUP BY group_id) last_post
-		ON
-			g.id = last_post.group_id
-		ORDER BY
-			g.name`
-
-	rows, err := db.sqlDB.Query(query)
+		SELECT g.id, g.name, g.description, last_post.max_received_date
+		FROM ` + "`groups`" + ` g
+		LEFT JOIN (SELECT group_id, MAX(received) as max_received_date FROM articles GROUP BY group_id) last_post
+		ON g.id = last_post.group_id
+		ORDER BY g.name`
+	rows, err := db.sqlDB.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("query for newsgroups with stats failed: %w", err)
+		err = fmt.Errorf("query for newsgroups with stats failed: %w", err)
+		span.RecordError(err)
+		return nil, err
 	}
 	defer rows.Close()
 
 	var groups []models.Newsgroup
 	for rows.Next() {
 		var group models.Newsgroup
-		var lastPostNullTime sql.NullTime // Use sql.NullTime for potentially null MAX(received)
-
+		var lastPostNullTime sql.NullTime
 		if err := rows.Scan(&group.ID, &group.Name, &group.Description, &lastPostNullTime); err != nil {
-			return nil, fmt.Errorf("failed to scan group row with last post date: %w", err)
+			scanErr := fmt.Errorf("failed to scan group row with last post date: %w", err)
+			span.RecordError(scanErr)
+			return nil, scanErr
 		}
-
 		if lastPostNullTime.Valid {
-			group.LastPostDate = &lastPostNullTime.Time // Store as *time.Time
+			group.LastPostDate = &lastPostNullTime.Time
 		}
-		// AvgPostsLastMonth and ShowAvgPosts will be populated by the handler later
-
 		groups = append(groups, group)
 	}
 
-	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("iteration error: %w", err)
+	if iterErr := rows.Err(); iterErr != nil {
+		err = fmt.Errorf("iteration error for newsgroups: %w", iterErr)
+		span.RecordError(err)
+		return nil, err
 	}
 
-	if db.cache != nil && len(groups) > 0 { // Only cache if there are results
-		db.cache.Set(cacheKey, groups, db.cacheTTL)
+	if db.cache != nil && len(groups) > 0 {
+		db.cache.Set(ctx, cacheKey, groups, db.cacheTTL)
 		log.Println("Cached result for GetAllNewsgroups")
 	}
 	return groups, nil
 }
 
-// GetMessagesForGroupMonth retrieves articles for a specific group and month/year.
-// Articles are ordered by received date, descending. It uses a cache.
-func (db *DB) GetMessagesForGroupMonth(groupName string, year int, month int) ([]models.Article, error) {
+func (db *DB) GetMessagesForGroupMonth(ctx context.Context, groupName string, year int, month int) ([]models.Article, error) {
+	_, span := otel.Tracer("nntp-web/internal/database").Start(ctx, "DB.GetMessagesForGroupMonth",
+		trace.WithAttributes(
+			attribute.String("group.name", groupName),
+			attribute.Int("year", year),
+			attribute.Int("month", month),
+		),
+	)
+	defer span.End()
+
 	cacheKey := fmt.Sprintf("groupmsgs:%s:%d-%02d", groupName, year, month)
 	if db.cache != nil {
-		if cached, found := db.cache.Get(cacheKey); found {
+		if cached, found := db.cache.Get(ctx, cacheKey); found {
 			if articles, ok := cached.([]models.Article); ok {
 				log.Printf("Cache hit for GetMessagesForGroupMonth: %s", cacheKey)
+				span.SetAttributes(attribute.Bool("cache.hit", true))
 				return articles, nil
 			}
 		}
 	}
 	log.Printf("Cache miss for GetMessagesForGroupMonth: %s, querying DB", cacheKey)
+	span.SetAttributes(attribute.Bool("cache.hit", false))
 
 	var groupID uint16
 	groupQuery := "SELECT id FROM `groups` WHERE name = ?"
-	err := db.sqlDB.QueryRow(groupQuery, groupName).Scan(&groupID)
+	err := db.sqlDB.QueryRowContext(ctx, groupQuery, groupName).Scan(&groupID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("group '%s' not found: %w", groupName, err)
+			err = fmt.Errorf("group '%s' not found: %w", groupName, err)
+		} else {
+			err = fmt.Errorf("failed to query group ID for '%s': %w", groupName, err)
 		}
-		return nil, fmt.Errorf("failed to query group ID for '%s': %w", groupName, err)
+		span.RecordError(err)
+		return nil, err
 	}
+	span.SetAttributes(attribute.Int("group.id", int(groupID)))
 
 	articleQuery := `
 		SELECT group_id, id, h_messageid, h_subject, h_from, h_date,
@@ -173,92 +199,97 @@ func (db *DB) GetMessagesForGroupMonth(groupName string, year int, month int) ([
 		WHERE group_id = ? AND YEAR(received) = ? AND MONTH(received) = ?
 		ORDER BY received DESC, id DESC`
 
-	rows, err := db.sqlDB.Query(articleQuery, groupID, year, month)
+	rows, err := db.sqlDB.QueryContext(ctx, articleQuery, groupID, year, month)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query articles for group '%s' (%d) year %d, month %d: %w", groupName, groupID, year, month, err)
+		err = fmt.Errorf("failed to query articles for group '%s' (%d) year %d, month %d: %w", groupName, groupID, year, month, err)
+		span.RecordError(err)
+		return nil, err
 	}
 	defer rows.Close()
 
 	var articles []models.Article
 	for rows.Next() {
 		var article models.Article
-		article.GroupName = groupName // Populate GroupName
+		article.GroupName = groupName
 		var rawMsgID string
-		if err := rows.Scan(
+		if scanErr := rows.Scan(
 			&article.GroupID, &article.ArticleNum, &rawMsgID, &article.Subject,
 			&article.From, &article.Date, &article.Received, &article.ThreadID,
 			&article.ParentNum, &article.RawReferences, &article.Lines, &article.Bytes,
-		); err != nil {
-			log.Printf("Error scanning article row for group '%s': %v", groupName, err)
-			// Decide on error handling: skip row or return error
-			// return nil, fmt.Errorf("failed to scan article row: %w", err)
-			continue // Skip problematic row
+		); scanErr != nil {
+			log.Printf("Error scanning article row for group '%s': %v", groupName, scanErr)
+			span.AddEvent("Row scan error", trace.WithAttributes(attribute.String("error.message", scanErr.Error())))
+			continue
 		}
 		article.MessageID = strings.Trim(rawMsgID, "<>")
 		article.References = models.ParseReferencesString(article.RawReferences)
 		articles = append(articles, article)
 	}
 
-	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("iteration error while fetching articles for group '%s': %w", groupName, err)
+	if iterErr := rows.Err(); iterErr != nil {
+		err = fmt.Errorf("iteration error while fetching articles for group '%s': %w", groupName, iterErr)
+		span.RecordError(err)
+		return nil, err
 	}
 
-	if db.cache != nil && len(articles) > 0 { // Only cache if results were found
-		db.cache.Set(cacheKey, articles, db.cacheTTL)
+	if db.cache != nil && len(articles) > 0 {
+		db.cache.Set(ctx, cacheKey, articles, db.cacheTTL)
 		log.Printf("Cached result for GetMessagesForGroupMonth: %s", cacheKey)
 	}
 	return articles, nil
 }
 
-// CachedGroupActivityStats is used to store the result of GetGroupActivityStats in cache.
 type CachedGroupActivityStats struct {
 	AvgPostsPerDay    float64
 	TotalPostsInPeriod int
 	HasRecentActivity bool
 }
 
-// GetGroupActivityStats calculates average posts per day for a group over a lookback period.
-// It returns average posts, total posts in period, and a flag indicating recent activity.
-// Results are cached for 1 hour.
-func (db *DB) GetGroupActivityStats(groupID uint16, lookbackDays int) (avgPosts float64, totalPostsInPeriod int, hasRecentActivity bool, err error) {
-	cacheKey := fmt.Sprintf("groupactivity:%d:%ddays", groupID, lookbackDays)
+func (db *DB) GetGroupActivityStats(ctx context.Context, groupID uint16, lookbackDays int) (avgPosts float64, totalPostsInPeriod int, hasRecentActivity bool, err error) {
+	_, span := otel.Tracer("nntp-web/internal/database").Start(ctx, "DB.GetGroupActivityStats",
+		trace.WithAttributes(
+			attribute.Int("group.id", int(groupID)),
+			attribute.Int("lookback.days", lookbackDays),
+		),
+	)
+	defer span.End()
 
+	cacheKey := fmt.Sprintf("groupactivity:%d:%ddays", groupID, lookbackDays)
 	if db.cache != nil {
-		if cached, found := db.cache.Get(cacheKey); found {
+		if cached, found := db.cache.Get(ctx, cacheKey); found {
 			if cachedStats, ok := cached.(CachedGroupActivityStats); ok {
 				log.Printf("Cache hit for GetGroupActivityStats: %s", cacheKey)
+				span.SetAttributes(attribute.Bool("cache.hit", true))
 				return cachedStats.AvgPostsPerDay, cachedStats.TotalPostsInPeriod, cachedStats.HasRecentActivity, nil
 			}
 		}
 	}
 	log.Printf("Cache miss for GetGroupActivityStats: %s, querying DB", cacheKey)
+	span.SetAttributes(attribute.Bool("cache.hit", false))
 
 	if lookbackDays <= 0 {
 		err = fmt.Errorf("lookbackDays must be positive, got %d", lookbackDays)
+		span.RecordError(err)
 		return
 	}
 
 	query := `
 		SELECT COUNT(*)
 		FROM articles
-		WHERE group_id = ? AND received >= DATE_SUB(NOW(), INTERVAL ? DAY)` // Using NOW() for better precision with time
+		WHERE group_id = ? AND received >= DATE_SUB(NOW(), INTERVAL ? DAY)`
 
 	var postCount int
-	dbErr := db.sqlDB.QueryRow(query, groupID, lookbackDays).Scan(&postCount)
+	dbErr := db.sqlDB.QueryRowContext(ctx, query, groupID, lookbackDays).Scan(&postCount)
 	if dbErr != nil {
-		// COUNT(*) should always return a row, even if count is 0.
-		// So, sql.ErrNoRows here would be unexpected.
-		// If there's any other error, we return it.
-		if dbErr != sql.ErrNoRows { // defensive check, though not expected for COUNT(*)
+		if dbErr != sql.ErrNoRows {
 			err = fmt.Errorf("failed to count recent articles for group %d: %w", groupID, dbErr)
+			span.RecordError(err)
 			return
 		}
-		// If it somehow was sql.ErrNoRows, treat as 0 count.
 		postCount = 0
 	}
-
+	span.SetAttributes(attribute.Int("posts.count", postCount))
 	totalPostsInPeriod = postCount
-
 	if totalPostsInPeriod > 0 {
 		hasRecentActivity = true
 		avgPosts = float64(totalPostsInPeriod) / float64(lookbackDays)
@@ -273,303 +304,278 @@ func (db *DB) GetGroupActivityStats(groupID uint16, lookbackDays int) (avgPosts 
 			TotalPostsInPeriod: totalPostsInPeriod,
 			HasRecentActivity: hasRecentActivity,
 		}
-		db.cache.Set(cacheKey, cachedData, 1*time.Hour) // Cache for 1 hour
+		db.cache.Set(ctx, cacheKey, cachedData, 1*time.Hour)
 		log.Printf("Cached result for GetGroupActivityStats: %s", cacheKey)
 	}
 	return
 }
 
-// GetMinMaxMessageMonthsForGroup finds the earliest and latest month/year with messages for a group.
-// Returns found=false if the group has no messages or does not exist. It uses a cache.
-// Note: Caching complex return values (multiple return values) requires a struct or careful handling.
-// For simplicity, we'll cache a struct here.
 type MinMaxMonthsResult struct {
-	MinYear int
-	MinMonth int
-	MaxYear int
-	MaxMonth int
-	Found bool
+	MinYear int; MinMonth int; MaxYear int; MaxMonth int; Found bool
 }
 
-func (db *DB) GetMinMaxMessageMonthsForGroup(groupName string) (minYear, minMonth, maxYear, maxMonth int, found bool, err error) {
+func (db *DB) GetMinMaxMessageMonthsForGroup(ctx context.Context, groupName string) (minYear, minMonth, maxYear, maxMonth int, found bool, err error) {
+	_, span := otel.Tracer("nntp-web/internal/database").Start(ctx, "DB.GetMinMaxMessageMonthsForGroup",
+		trace.WithAttributes(attribute.String("group.name", groupName)),
+	)
+	defer span.End()
+
 	cacheKey := fmt.Sprintf("groupminmax:%s", groupName)
 	if db.cache != nil {
-		if cached, foundCache := db.cache.Get(cacheKey); foundCache {
+		if cached, foundCache := db.cache.Get(ctx, cacheKey); foundCache {
 			if result, ok := cached.(MinMaxMonthsResult); ok {
 				log.Printf("Cache hit for GetMinMaxMessageMonthsForGroup: %s", cacheKey)
+				span.SetAttributes(attribute.Bool("cache.hit", true))
 				return result.MinYear, result.MinMonth, result.MaxYear, result.MaxMonth, result.Found, nil
 			}
 		}
 	}
 	log.Printf("Cache miss for GetMinMaxMessageMonthsForGroup: %s, querying DB", cacheKey)
+	span.SetAttributes(attribute.Bool("cache.hit", false))
 
 	var groupID uint16
 	groupQuery := "SELECT id FROM `groups` WHERE name = ?"
-	err = db.sqlDB.QueryRow(groupQuery, groupName).Scan(&groupID)
+	err = db.sqlDB.QueryRowContext(ctx, groupQuery, groupName).Scan(&groupID)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return 0, 0, 0, 0, false, fmt.Errorf("group '%s' not found: %w", groupName, err)
-		}
-		return 0, 0, 0, 0, false, fmt.Errorf("failed to query group ID for '%s': %w", groupName, err)
+		if err == sql.ErrNoRows { err = fmt.Errorf("group '%s' not found: %w", groupName, err)
+		} else { err = fmt.Errorf("failed to query group ID for '%s': %w", groupName, err) }
+		span.RecordError(err); return 0, 0, 0, 0, false, err
 	}
+	span.SetAttributes(attribute.Int("group.id", int(groupID)))
 
-	// query := ` // This query was unused after switching to MIN(received), MAX(received)
-	// 	SELECT
-	// 		MIN(YEAR(received)), MIN(MONTH(received)),
-	// 		MAX(YEAR(received)), MAX(MONTH(received))
-	// 	FROM articles
-	// 	WHERE group_id = ?`
-
-	// Need to handle NULL if no rows, sql.NullInt32 or similar, or check count first.
-	// Simpler: check if any messages exist for the group first.
 	var count int
 	countQuery := "SELECT COUNT(*) FROM articles WHERE group_id = ?"
-	err = db.sqlDB.QueryRow(countQuery, groupID).Scan(&count)
+	err = db.sqlDB.QueryRowContext(ctx, countQuery, groupID).Scan(&count)
 	if err != nil {
-		return 0,0,0,0, false, fmt.Errorf("failed to count messages for group %d: %w", groupID, err)
+		err = fmt.Errorf("failed to count messages for group %d: %w", groupID, err)
+		span.RecordError(err); return 0, 0, 0, 0, false, err
 	}
+	span.SetAttributes(attribute.Int("messages.count", count))
 	if count == 0 {
-		return 0,0,0,0, false, nil // No messages in group, found = false
+		if db.cache != nil { db.cache.Set(ctx, cacheKey, MinMaxMonthsResult{Found: false}, db.cacheTTL) }
+		return 0, 0, 0, 0, false, nil
 	}
 
-	// Since MySQL MIN/MAX on date parts won't give the correct month for MIN(YEAR(received)) if it's not Jan.
-	// It's better to get MIN(received) and MAX(received) directly.
 	var minDate, maxDate time.Time
 	dateQuery := "SELECT MIN(received), MAX(received) FROM articles WHERE group_id = ?"
-	err = db.sqlDB.QueryRow(dateQuery, groupID).Scan(&minDate, &maxDate)
+	err = db.sqlDB.QueryRowContext(ctx, dateQuery, groupID).Scan(&minDate, &maxDate)
 	if err != nil {
-		// This should not happen if count > 0, but handle defensively.
-		return 0,0,0,0, false, fmt.Errorf("failed to get min/max dates for group %d: %w", groupID, err)
+		err = fmt.Errorf("failed to get min/max dates for group %d: %w", groupID, err)
+		span.RecordError(err); return 0, 0, 0, 0, false, err
 	}
 
 	result := MinMaxMonthsResult{
-		MinYear: minDate.Year(), MinMonth: int(minDate.Month()),
-		MaxYear: maxDate.Year(), MaxMonth: int(maxDate.Month()),
-		Found: true,
+		MinYear:  minDate.Year(), MinMonth: int(minDate.Month()),
+		MaxYear:  maxDate.Year(), MaxMonth: int(maxDate.Month()),
+		Found:    true,
 	}
 	if db.cache != nil {
-		db.cache.Set(cacheKey, result, db.cacheTTL)
+		db.cache.Set(ctx, cacheKey, result, db.cacheTTL)
 		log.Printf("Cached result for GetMinMaxMessageMonthsForGroup: %s", cacheKey)
 	}
 	return result.MinYear, result.MinMonth, result.MaxYear, result.MaxMonth, result.Found, nil
 }
 
-// CachedMonthNavResult stores result for prev/next month navigation functions.
-type CachedMonthNavResult struct {
-	Year int
-	Month int
-	Found bool
-}
+type CachedMonthNavResult struct { Year int; Month int; Found bool }
 
-// GetPrevMonthWithMessages finds the nearest previous month with messages for the group. It uses a cache.
-func (db *DB) GetPrevMonthWithMessages(groupName string, currentYear, currentMonth int) (prevYear, prevMonth int, found bool, err error) {
+func (db *DB) GetPrevMonthWithMessages(ctx context.Context, groupName string, currentYear, currentMonth int) (prevYear, prevMonth int, found bool, err error) {
+	_, span := otel.Tracer("nntp-web/internal/database").Start(ctx, "DB.GetPrevMonthWithMessages",
+		trace.WithAttributes(
+			attribute.String("group.name", groupName),
+			attribute.Int("current.year", currentYear),
+			attribute.Int("current.month", currentMonth),
+		),
+	)
+	defer span.End()
+
 	cacheKey := fmt.Sprintf("prevmonth:%s:%d-%02d", groupName, currentYear, currentMonth)
 	if db.cache != nil {
-		if cached, foundCache := db.cache.Get(cacheKey); foundCache {
+		if cached, foundCache := db.cache.Get(ctx, cacheKey); foundCache {
 			if result, ok := cached.(CachedMonthNavResult); ok {
 				log.Printf("Cache hit for GetPrevMonthWithMessages: %s", cacheKey)
-				return result.Year, result.Month, result.Found, nil
+				span.SetAttributes(attribute.Bool("cache.hit", true)); return result.Year, result.Month, result.Found, nil
 			}
 		}
 	}
 	log.Printf("Cache miss for GetPrevMonthWithMessages: %s, querying DB", cacheKey)
+	span.SetAttributes(attribute.Bool("cache.hit", false))
 
 	var groupID uint16
 	groupQuery := "SELECT id FROM `groups` WHERE name = ?"
-	err = db.sqlDB.QueryRow(groupQuery, groupName).Scan(&groupID)
+	err = db.sqlDB.QueryRowContext(ctx, groupQuery, groupName).Scan(&groupID)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return 0, 0, false, fmt.Errorf("group '%s' not found: %w", groupName, err)
-		}
-		return 0, 0, false, fmt.Errorf("failed to query group ID for '%s': %w", groupName, err)
+		if err == sql.ErrNoRows { err = fmt.Errorf("group '%s' not found: %w", groupName, err)
+		} else { err = fmt.Errorf("failed to query group ID for '%s': %w", groupName, err) }
+		span.RecordError(err); return 0, 0, false, err
 	}
+	span.SetAttributes(attribute.Int("group.id", int(groupID)))
 
-	// Target date represents the first day of the current month
 	targetDate := time.Date(currentYear, time.Month(currentMonth), 1, 0, 0, 0, 0, time.UTC)
-
-	query := `
-		SELECT YEAR(received), MONTH(received)
-		FROM articles
-		WHERE group_id = ? AND received < ?
-		ORDER BY received DESC
-		LIMIT 1`
-
+	query := `SELECT YEAR(received), MONTH(received) FROM articles WHERE group_id = ? AND received < ? ORDER BY received DESC LIMIT 1`
 	var pYear, pMonth int
-	err = db.sqlDB.QueryRow(query, groupID, targetDate).Scan(&pYear, &pMonth)
+	err = db.sqlDB.QueryRowContext(ctx, query, groupID, targetDate).Scan(&pYear, &pMonth)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			if db.cache != nil {
-				db.cache.Set(cacheKey, CachedMonthNavResult{Found: false}, db.cacheTTL)
-			}
-			return 0, 0, false, nil // No previous month with messages
+			if db.cache != nil { db.cache.Set(ctx, cacheKey, CachedMonthNavResult{Found: false}, db.cacheTTL) }
+			span.SetAttributes(attribute.Bool("found", false)); return 0, 0, false, nil
 		}
-		return 0, 0, false, fmt.Errorf("failed to find previous month for group %d: %w", groupID, err)
+		err = fmt.Errorf("failed to find previous month for group %d: %w", groupID, err)
+		span.RecordError(err); return 0, 0, false, err
 	}
-	if db.cache != nil {
-		db.cache.Set(cacheKey, CachedMonthNavResult{Year: pYear, Month: pMonth, Found: true}, db.cacheTTL)
-	}
+	if db.cache != nil { db.cache.Set(ctx, cacheKey, CachedMonthNavResult{Year: pYear, Month: pMonth, Found: true}, db.cacheTTL) }
+	span.SetAttributes(attribute.Bool("found", true), attribute.Int("prev.year", pYear), attribute.Int("prev.month", pMonth))
 	return pYear, pMonth, true, nil
 }
 
-// GetNextMonthWithMessages finds the nearest next month with messages for the group. It uses a cache.
-func (db *DB) GetNextMonthWithMessages(groupName string, currentYear, currentMonth int) (nextYear, nextMonth int, found bool, err error) {
+func (db *DB) GetNextMonthWithMessages(ctx context.Context, groupName string, currentYear, currentMonth int) (nextYear, nextMonth int, found bool, err error) {
+	_, span := otel.Tracer("nntp-web/internal/database").Start(ctx, "DB.GetNextMonthWithMessages",
+		trace.WithAttributes(
+			attribute.String("group.name", groupName),
+			attribute.Int("current.year", currentYear),
+			attribute.Int("current.month", currentMonth),
+		),
+	)
+	defer span.End()
+
 	cacheKey := fmt.Sprintf("nextmonth:%s:%d-%02d", groupName, currentYear, currentMonth)
 	if db.cache != nil {
-		if cached, foundCache := db.cache.Get(cacheKey); foundCache {
+		if cached, foundCache := db.cache.Get(ctx, cacheKey); foundCache {
 			if result, ok := cached.(CachedMonthNavResult); ok {
 				log.Printf("Cache hit for GetNextMonthWithMessages: %s", cacheKey)
-				return result.Year, result.Month, result.Found, nil
+				span.SetAttributes(attribute.Bool("cache.hit", true)); return result.Year, result.Month, result.Found, nil
 			}
 		}
 	}
 	log.Printf("Cache miss for GetNextMonthWithMessages: %s, querying DB", cacheKey)
+	span.SetAttributes(attribute.Bool("cache.hit", false))
 
 	var groupID uint16
 	groupQuery := "SELECT id FROM `groups` WHERE name = ?"
-	err = db.sqlDB.QueryRow(groupQuery, groupName).Scan(&groupID)
+	err = db.sqlDB.QueryRowContext(ctx, groupQuery, groupName).Scan(&groupID)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return 0, 0, false, fmt.Errorf("group '%s' not found: %w", groupName, err)
-		}
-		return 0, 0, false, fmt.Errorf("failed to query group ID for '%s': %w", groupName, err)
+		if err == sql.ErrNoRows { err = fmt.Errorf("group '%s' not found: %w", groupName, err)
+		} else { err = fmt.Errorf("failed to query group ID for '%s': %w", groupName, err) }
+		span.RecordError(err); return 0, 0, false, err
 	}
+	span.SetAttributes(attribute.Int("group.id", int(groupID)))
 
-	// Target date represents the first day of the *next* month relative to current view
 	targetDate := time.Date(currentYear, time.Month(currentMonth), 1, 0, 0, 0, 0, time.UTC).AddDate(0, 1, 0)
-
-	query := `
-		SELECT YEAR(received), MONTH(received)
-		FROM articles
-		WHERE group_id = ? AND received >= ?
-		ORDER BY received ASC
-		LIMIT 1`
-
+	query := `SELECT YEAR(received), MONTH(received) FROM articles WHERE group_id = ? AND received >= ? ORDER BY received ASC LIMIT 1`
 	var nYear, nMonth int
-	err = db.sqlDB.QueryRow(query, groupID, targetDate).Scan(&nYear, &nMonth)
+	err = db.sqlDB.QueryRowContext(ctx, query, groupID, targetDate).Scan(&nYear, &nMonth)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			if db.cache != nil {
-				db.cache.Set(cacheKey, CachedMonthNavResult{Found: false}, db.cacheTTL)
-			}
-			return 0, 0, false, nil // No next month with messages
+			if db.cache != nil { db.cache.Set(ctx, cacheKey, CachedMonthNavResult{Found: false}, db.cacheTTL) }
+			span.SetAttributes(attribute.Bool("found", false)); return 0, 0, false, nil
 		}
-		return 0, 0, false, fmt.Errorf("failed to find next month for group %d: %w", groupID, err)
+		err = fmt.Errorf("failed to find next month for group %d: %w", groupID, err)
+		span.RecordError(err); return 0, 0, false, err
 	}
-	if db.cache != nil {
-		db.cache.Set(cacheKey, CachedMonthNavResult{Year: nYear, Month: nMonth, Found: true}, db.cacheTTL)
-	}
+	if db.cache != nil { db.cache.Set(ctx, cacheKey, CachedMonthNavResult{Year: nYear, Month: nMonth, Found: true}, db.cacheTTL) }
+	span.SetAttributes(attribute.Bool("found", true), attribute.Int("next.year", nYear), attribute.Int("next.month", nMonth))
 	return nYear, nMonth, true, nil
 }
 
-// CachedLatestMonthResult stores result for GetLatestMessageMonthForGroup.
-type CachedLatestMonthResult struct {
-	Year  int
-	Month int
-	Found bool
-}
+type CachedLatestMonthResult struct { Year  int; Month int; Found bool }
 
-// GetLatestMessageMonthForGroup finds the most recent year and month with messages for a group.
-// Returns found=false if the group has no messages or does not exist. It uses a cache.
-func (db *DB) GetLatestMessageMonthForGroup(groupName string) (year, month int, found bool) {
+func (db *DB) GetLatestMessageMonthForGroup(ctx context.Context, groupName string) (year, month int, found bool) {
+	_, span := otel.Tracer("nntp-web/internal/database").Start(ctx, "DB.GetLatestMessageMonthForGroup",
+		trace.WithAttributes(attribute.String("group.name", groupName)),
+	)
+	defer span.End()
+
 	cacheKey := fmt.Sprintf("latestmonth:%s", groupName)
 	if db.cache != nil {
-		if cached, foundCache := db.cache.Get(cacheKey); foundCache {
+		if cached, foundCache := db.cache.Get(ctx, cacheKey); foundCache {
 			if result, ok := cached.(CachedLatestMonthResult); ok {
 				log.Printf("Cache hit for GetLatestMessageMonthForGroup: %s", cacheKey)
-				return result.Year, result.Month, result.Found
+				span.SetAttributes(attribute.Bool("cache.hit", true)); return result.Year, result.Month, result.Found
 			}
 		}
 	}
 	log.Printf("Cache miss for GetLatestMessageMonthForGroup: %s, querying DB", cacheKey)
+	span.SetAttributes(attribute.Bool("cache.hit", false))
 
 	var groupID uint16
 	groupQuery := "SELECT id FROM `groups` WHERE name = ?"
-	err := db.sqlDB.QueryRow(groupQuery, groupName).Scan(&groupID)
-	if err != nil {
-		if err == sql.ErrNoRows { // Group not found
+	dbErr := db.sqlDB.QueryRowContext(ctx, groupQuery, groupName).Scan(&groupID)
+	if dbErr != nil {
+		if dbErr == sql.ErrNoRows {
 			log.Printf("Group '%s' not found in GetLatestMessageMonthForGroup.", groupName)
-			if db.cache != nil {
-				db.cache.Set(cacheKey, CachedLatestMonthResult{Found: false}, db.cacheTTL)
-			}
-			return 0, 0, false
+			if db.cache != nil { db.cache.Set(ctx, cacheKey, CachedLatestMonthResult{Found: false}, db.cacheTTL) }
+		} else {
+			log.Printf("Error querying group ID for '%s' in GetLatestMessageMonthForGroup: %v", groupName, dbErr)
+			span.RecordError(dbErr)
 		}
-		log.Printf("Error querying group ID for '%s' in GetLatestMessageMonthForGroup: %v", groupName, err)
-		// For other DB errors, we don't cache and let the error propagate implicitly by returning false
 		return 0, 0, false
 	}
+	span.SetAttributes(attribute.Int("group.id", int(groupID)))
 
-	query := `
-		SELECT YEAR(received), MONTH(received)
-		FROM articles
-		WHERE group_id = ?
-		ORDER BY received DESC
-		LIMIT 1`
-
+	query := `SELECT YEAR(received), MONTH(received) FROM articles WHERE group_id = ? ORDER BY received DESC LIMIT 1`
 	var y, m int
-	err = db.sqlDB.QueryRow(query, groupID).Scan(&y, &m)
-	if err != nil {
-		if err == sql.ErrNoRows { // No messages in the group
+	dbErr = db.sqlDB.QueryRowContext(ctx, query, groupID).Scan(&y, &m)
+	if dbErr != nil {
+		if dbErr == sql.ErrNoRows {
 			log.Printf("No messages found for group '%s' (ID: %d) in GetLatestMessageMonthForGroup.", groupName, groupID)
-			if db.cache != nil {
-				db.cache.Set(cacheKey, CachedLatestMonthResult{Found: false}, db.cacheTTL)
-			}
-			return 0, 0, false
+			if db.cache != nil { db.cache.Set(ctx, cacheKey, CachedLatestMonthResult{Found: false}, db.cacheTTL) }
+		} else {
+			log.Printf("Error querying latest month for group '%s' (ID: %d): %v", groupName, groupID, dbErr)
+			span.RecordError(dbErr)
 		}
-		// For other DB errors, don't cache, return found=false
-		log.Printf("Error querying latest month for group '%s' (ID: %d): %v", groupName, groupID, err)
 		return 0, 0, false
 	}
 
 	if db.cache != nil {
-		db.cache.Set(cacheKey, CachedLatestMonthResult{Year: y, Month: m, Found: true}, db.cacheTTL)
+		db.cache.Set(ctx, cacheKey, CachedLatestMonthResult{Year: y, Month: m, Found: true}, db.cacheTTL)
 		log.Printf("Cached result for GetLatestMessageMonthForGroup: %s (Year: %d, Month: %d)", cacheKey, y, m)
 	}
+	span.SetAttributes(attribute.Bool("found", true), attribute.Int("latest.year", y), attribute.Int("latest.month", m))
 	return y, m, true
 }
 
+func (db *DB) GetArticleByDetails(ctx context.Context, groupName string, year int, month int, articleNum uint32) (*models.Article, error) {
+	_, span := otel.Tracer("nntp-web/internal/database").Start(ctx, "DB.GetArticleByDetails",
+		trace.WithAttributes(
+			attribute.String("group.name", groupName),
+			attribute.Int("year", year),
+			attribute.Int("month", month),
+			attribute.Int("article.num", int(articleNum)),
+		),
+	)
+	defer span.End()
 
-// GetArticleByDetails retrieves a specific article by its group name, year, month, and article number (articles.id).
-// It also populates the Article.GroupName field. It uses a cache.
-func (db *DB) GetArticleByDetails(groupName string, year int, month int, articleNum uint32) (*models.Article, error) {
 	cacheKey := fmt.Sprintf("article:%s:%d-%02d:%d", groupName, year, month, articleNum)
 	if db.cache != nil {
-		if cached, found := db.cache.Get(cacheKey); found {
-			if article, ok := cached.(*models.Article); ok { // Note: pointer type
+		if cached, found := db.cache.Get(ctx, cacheKey); found {
+			if article, ok := cached.(*models.Article); ok {
 				log.Printf("Cache hit for GetArticleByDetails: %s", cacheKey)
-				return article, nil
+				span.SetAttributes(attribute.Bool("cache.hit", true)); return article, nil
 			}
 		}
 	}
 	log.Printf("Cache miss for GetArticleByDetails: %s, querying DB", cacheKey)
+	span.SetAttributes(attribute.Bool("cache.hit", false))
 
 	var groupID uint16
 	groupQuery := "SELECT id FROM `groups` WHERE name = ?"
-	err := db.sqlDB.QueryRow(groupQuery, groupName).Scan(&groupID)
+	err := db.sqlDB.QueryRowContext(ctx, groupQuery, groupName).Scan(&groupID)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("group '%s' not found for article lookup: %w", groupName, err)
-		}
-		return nil, fmt.Errorf("failed to query group ID for '%s': %w", groupName, err)
+		if err == sql.ErrNoRows { err = fmt.Errorf("group '%s' not found for article lookup: %w", groupName, err)
+		} else { err = fmt.Errorf("failed to query group ID for '%s': %w", groupName, err) }
+		span.RecordError(err); return nil, err
 	}
+	span.SetAttributes(attribute.Int("group.id", int(groupID)))
 
-	// Note: The schema uses articles.id as the article number within a group.
-	// The date components in the query are to ensure we are specific, though 'id' within a group should be unique.
-	// However, the problem implies year/month might be part of canonical URL, so we check against `received`.
 	articleQuery := `
 		SELECT group_id, id, h_messageid, h_subject, h_from, h_date,
 		       received, thread_id, parent, h_references, h_lines, h_bytes
 		FROM articles
-		WHERE group_id = ? AND id = ?
-		  AND YEAR(received) = ? AND MONTH(received) = ?
+		WHERE group_id = ? AND id = ? AND YEAR(received) = ? AND MONTH(received) = ?
 		LIMIT 1`
-	// We might also want a variant that only uses group_id and id if year/month in URL might be wrong.
-	// The handler will decide if a redirect is needed based on `article.Received` vs URL year/month.
-
 	var article models.Article
 	article.GroupName = groupName
 	var rawMsgID string
-
-	err = db.sqlDB.QueryRow(articleQuery, groupID, articleNum, year, month).Scan(
+	err = db.sqlDB.QueryRowContext(ctx, articleQuery, groupID, articleNum, year, month).Scan(
 		&article.GroupID, &article.ArticleNum, &rawMsgID, &article.Subject,
 		&article.From, &article.Date, &article.Received, &article.ThreadID,
 		&article.ParentNum, &article.RawReferences, &article.Lines, &article.Bytes,
@@ -578,16 +584,13 @@ func (db *DB) GetArticleByDetails(groupName string, year int, month int, article
 		article.MessageID = strings.Trim(rawMsgID, "<>")
 		article.References = models.ParseReferencesString(article.RawReferences)
 	} else if err == sql.ErrNoRows {
-		// Attempt to find the article by group_id and articleNum only, to check if year/month were wrong
+		span.AddEvent("Strict article query failed (no rows), trying relaxed query.")
 		relaxedArticleQuery := `
 			SELECT group_id, id, h_messageid, h_subject, h_from, h_date,
 					received, thread_id, parent, h_references, h_lines, h_bytes
-			FROM articles
-			WHERE group_id = ? AND id = ?
-			LIMIT 1`
+			FROM articles WHERE group_id = ? AND id = ? LIMIT 1`
 		var relaxedRawMsgID string
-		// article struct is reused, GroupName is already set.
-		errRelaxed := db.sqlDB.QueryRow(relaxedArticleQuery, groupID, articleNum).Scan(
+		errRelaxed := db.sqlDB.QueryRowContext(ctx, relaxedArticleQuery, groupID, articleNum).Scan(
 			&article.GroupID, &article.ArticleNum, &relaxedRawMsgID, &article.Subject,
 			&article.From, &article.Date, &article.Received, &article.ThreadID,
 			&article.ParentNum, &article.RawReferences, &article.Lines, &article.Bytes,
@@ -595,107 +598,107 @@ func (db *DB) GetArticleByDetails(groupName string, year int, month int, article
 		if errRelaxed == nil {
 			article.MessageID = strings.Trim(relaxedRawMsgID, "<>")
 			article.References = models.ParseReferencesString(article.RawReferences)
-			// This is the article to return (for redirect), cache it under the original key
 			if db.cache != nil {
-				db.cache.Set(cacheKey, &article, db.cacheTTL)
+				db.cache.Set(ctx, cacheKey, &article, db.cacheTTL)
 				log.Printf("Cached result (after relaxed query) for GetArticleByDetails: %s", cacheKey)
 			}
-			return &article, nil
+			span.SetAttributes(attribute.Bool("found_relaxed", true)); return &article, nil
 		}
-		// If still not found, then it's a genuine ErrNoRows for this group/articleNum combination.
-		return nil, fmt.Errorf("article num %d in group '%s' (year %d, month %d) not found: %w", articleNum, groupName, year, month, sql.ErrNoRows)
-	} else { // Other error from the initial query
-		return nil, fmt.Errorf("failed to query article num %d in group '%s': %w", articleNum, groupName, err)
+		err = fmt.Errorf("article num %d in group '%s' (year %d, month %d) not found (strict and relaxed): %w", articleNum, groupName, year, month, sql.ErrNoRows)
+		span.RecordError(err); return nil, err
+	} else {
+		err = fmt.Errorf("failed to query article num %d in group '%s': %w", articleNum, groupName, err)
+		span.RecordError(err); return nil, err
 	}
-	// This part is reached if the first query succeeded.
+
 	if db.cache != nil {
-		db.cache.Set(cacheKey, &article, db.cacheTTL)
+		db.cache.Set(ctx, cacheKey, &article, db.cacheTTL)
 		log.Printf("Cached result for GetArticleByDetails: %s", cacheKey)
 	}
 	return &article, nil
 }
 
+func (db *DB) GetArticleByMessageID(ctx context.Context, messageIDVal string) (*models.Article, error) {
+	_, span := otel.Tracer("nntp-web/internal/database").Start(ctx, "DB.GetArticleByMessageID",
+		trace.WithAttributes(attribute.String("message.id", messageIDVal)),
+	)
+	defer span.End()
 
-// GetArticleByMessageID retrieves a specific article by its h_messageid (full Message-ID).
-// It also populates the Article.GroupName field. It uses a cache.
-func (db *DB) GetArticleByMessageID(messageIDVal string) (*models.Article, error) {
 	cacheKey := fmt.Sprintf("article:msgid:%s", messageIDVal)
 	if db.cache != nil {
-		if cached, found := db.cache.Get(cacheKey); found {
+		if cached, found := db.cache.Get(ctx, cacheKey); found {
 			if article, ok := cached.(*models.Article); ok {
 				log.Printf("Cache hit for GetArticleByMessageID: %s", cacheKey)
-				return article, nil
+				span.SetAttributes(attribute.Bool("cache.hit", true)); return article, nil
 			}
 		}
 	}
 	log.Printf("Cache miss for GetArticleByMessageID: %s, querying DB", cacheKey)
+	span.SetAttributes(attribute.Bool("cache.hit", false))
 
 	articleQuery := `
 		SELECT a.group_id, a.id, a.h_messageid, a.h_subject, a.h_from, a.h_date,
 		       a.received, a.thread_id, a.parent, a.h_references, a.h_lines, a.h_bytes,
 		       g.name as group_name
-		FROM articles a
-		JOIN ` + "`groups`" + ` g ON a.group_id = g.id
-		WHERE a.h_messageid = ?
-		LIMIT 1`
-
+		FROM articles a JOIN ` + "`groups`" + ` g ON a.group_id = g.id
+		WHERE a.h_messageid = ? LIMIT 1`
 	var article models.Article
-	var rawMsgID string // To scan h_messageid which includes <>
-	err := db.sqlDB.QueryRow(articleQuery, messageIDVal).Scan(
+	var rawMsgID string
+	err := db.sqlDB.QueryRowContext(ctx, articleQuery, messageIDVal).Scan(
 		&article.GroupID, &article.ArticleNum, &rawMsgID, &article.Subject,
 		&article.From, &article.Date, &article.Received, &article.ThreadID,
 		&article.ParentNum, &article.RawReferences, &article.Lines, &article.Bytes,
 		&article.GroupName,
 	)
-
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("article with Message-ID '%s' not found: %w", messageIDVal, err)
-		}
-		return nil, fmt.Errorf("failed to query article by Message-ID '%s': %w", messageIDVal, err)
+		if err == sql.ErrNoRows { err = fmt.Errorf("article with Message-ID '%s' not found: %w", messageIDVal, err)
+		} else { err = fmt.Errorf("failed to query article by Message-ID '%s': %w", messageIDVal, err)}
+		span.RecordError(err); return nil, err
 	}
 	article.MessageID = strings.Trim(rawMsgID, "<>")
 	article.References = models.ParseReferencesString(article.RawReferences)
-
 	if db.cache != nil {
-		db.cache.Set(cacheKey, &article, db.cacheTTL)
+		db.cache.Set(ctx, cacheKey, &article, db.cacheTTL)
 		log.Printf("Cached result for GetArticleByMessageID: %s", cacheKey)
 	}
 	return &article, nil
 }
 
-// GetThreadMessages retrieves all messages in the same thread.
-// It includes the article that might be the "current" one if it's part of the thread.
-// Articles are ordered by their received date. It also populates the Article.GroupName field. It uses a cache.
-func (db *DB) GetThreadMessages(threadID uint32, groupID uint16) ([]models.Article, error) {
-	// Cache key updated to include groupID for more specific caching of full threads per group.
+func (db *DB) GetThreadMessages(ctx context.Context, threadID uint32, groupID uint16) ([]models.Article, error) {
+	_, span := otel.Tracer("nntp-web/internal/database").Start(ctx, "DB.GetThreadMessages",
+		trace.WithAttributes(
+			attribute.Int("thread.id", int(threadID)),
+			attribute.Int("group.id", int(groupID)),
+		),
+	)
+	defer span.End()
+
 	cacheKey := fmt.Sprintf("threadmsgs:full:%d:%d", threadID, groupID)
 	if db.cache != nil {
-		if cached, found := db.cache.Get(cacheKey); found {
+		if cached, found := db.cache.Get(ctx, cacheKey); found {
 			if articles, ok := cached.([]models.Article); ok {
 				log.Printf("Cache hit for GetThreadMessages (full thread, group %d): %s", groupID, cacheKey)
-				return articles, nil
+				span.SetAttributes(attribute.Bool("cache.hit", true)); return articles, nil
 			}
 		}
 	}
 	log.Printf("Cache miss for GetThreadMessages (full thread, group %d): %s, querying DB", groupID, cacheKey)
+	span.SetAttributes(attribute.Bool("cache.hit", false))
 
 	query := `
 		SELECT a.group_id, a.id, a.h_messageid, a.h_subject, a.h_from, a.h_date,
 		       a.received, a.thread_id, a.parent, a.h_references, a.h_lines, a.h_bytes,
 		       g.name as group_name
-		FROM articles a
-		JOIN ` + "`groups` g ON a.group_id = g.id" + `
-		WHERE a.thread_id = ? AND a.group_id = ?
-		ORDER BY a.received ASC, a.id ASC` // Order by date, then by article number for tie-breaking
-
+		FROM articles a JOIN ` + "`groups` g ON a.group_id = g.id" + `
+		WHERE a.thread_id = ? AND a.group_id = ? ORDER BY a.received ASC, a.id ASC`
 	if db.cfg != nil && db.cfg.LogSQLQueries {
 		log.Printf("DB_QUERY: GetThreadMessages - SQL: %s - Args: [%d, %d]", strings.ReplaceAll(strings.TrimSpace(query), "\n", " "), threadID, groupID)
 	}
 
-	rows, err := db.sqlDB.Query(query, threadID, groupID)
+	rows, err := db.sqlDB.QueryContext(ctx, query, threadID, groupID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query thread messages for thread_id %d: %w", threadID, err)
+		err = fmt.Errorf("failed to query thread messages for thread_id %d: %w", threadID, err)
+		span.RecordError(err); return nil, err
 	}
 	defer rows.Close()
 
@@ -703,13 +706,14 @@ func (db *DB) GetThreadMessages(threadID uint32, groupID uint16) ([]models.Artic
 	for rows.Next() {
 		var article models.Article
 		var rawMsgID string
-		if err := rows.Scan(
+		if errScan := rows.Scan(
 			&article.GroupID, &article.ArticleNum, &rawMsgID, &article.Subject,
 			&article.From, &article.Date, &article.Received, &article.ThreadID,
 			&article.ParentNum, &article.RawReferences, &article.Lines, &article.Bytes,
 			&article.GroupName,
-		); err != nil {
-			log.Printf("Error scanning article row for thread_id %d: %v", threadID, err)
+		); errScan != nil {
+			log.Printf("Error scanning article row for thread_id %d: %v", threadID, errScan)
+			span.AddEvent("Row scan error", trace.WithAttributes(attribute.String("error.message", errScan.Error())))
 			continue
 		}
 		article.MessageID = strings.Trim(rawMsgID, "<>")
@@ -717,12 +721,13 @@ func (db *DB) GetThreadMessages(threadID uint32, groupID uint16) ([]models.Artic
 		articles = append(articles, article)
 	}
 
-	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("iteration error while fetching thread messages for thread_id %d: %w", threadID, err)
+	if iterErr := rows.Err(); iterErr != nil {
+		err = fmt.Errorf("iteration error while fetching thread messages for thread_id %d: %w", threadID, iterErr)
+		span.RecordError(err); return nil, err
 	}
 
 	if db.cache != nil && len(articles) > 0 {
-		db.cache.Set(cacheKey, articles, db.cacheTTL)
+		db.cache.Set(ctx, cacheKey, articles, db.cacheTTL)
 		log.Printf("Cached result for GetThreadMessages: %s", cacheKey)
 	}
 	return articles, nil

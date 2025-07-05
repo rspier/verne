@@ -13,9 +13,11 @@ func TestCache_GetSet(t *testing.T) {
 	value := "testValue"
 	duration := 100 * time.Millisecond
 
+	ctx := context.Background() // Define context for tests
+
 	// Test Set and Get
-	cache.Set(key, value, duration)
-	retVal, found := cache.Get(key)
+	cache.Set(ctx, key, value, duration)
+	retVal, found := cache.Get(ctx, key)
 	if !found {
 		t.Errorf("Cache.Get: key %s not found after Set", key)
 	}

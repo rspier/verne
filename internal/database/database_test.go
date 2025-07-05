@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context" // Added for OTel context propagation
 	"database/sql"
 	"database/sql/driver"
 	"errors"
@@ -23,6 +24,8 @@ func TestDB_GetAllNewsgroups(t *testing.T) {
 		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
 	defer mockDB.Close()
+	ctx := context.Background()
+
 
 	// Manually crafted regex for sqlmock, escaping . and ()
 	queryRegex := `SELECT g\.id, g\.name, g\.description, last_post\.max_received_date FROM ` + "`groups`" + ` g LEFT JOIN \(SELECT group_id, MAX\(received\) as max_received_date FROM articles GROUP BY group_id\) last_post ON g\.id = last_post\.group_id ORDER BY g\.name`
@@ -65,16 +68,14 @@ func TestDB_GetAllNewsgroups(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Pass nil for config, as these tests don't rely on config-specific behavior like SQL logging.
-			// NewWithSQLDB will use a default TTL if config is nil or CacheTTLSeconds is not positive.
 			db := NewWithSQLDB(mockDB, nil)
 			if tt.mockExpectErr != nil {
-				mock.ExpectQuery(queryRegex).WillReturnError(tt.mockExpectErr) // Use queryRegex directly
+				mock.ExpectQuery(queryRegex).WillReturnError(tt.mockExpectErr)
 			} else {
-				mock.ExpectQuery(queryRegex).WillReturnRows(tt.mockRows) // Use queryRegex directly
+				mock.ExpectQuery(queryRegex).WillReturnRows(tt.mockRows)
 			}
 
-			groups, err := db.GetAllNewsgroups()
+			groups, err := db.GetAllNewsgroups(ctx) // Pass context
 
 			if (err != nil) != tt.expectErr {
 				t.Errorf("GetAllNewsgroups() error = %v, expectErr %v", err, tt.expectErr)
@@ -85,7 +86,6 @@ func TestDB_GetAllNewsgroups(t *testing.T) {
 				if len(groups) != len(tt.expected) {
 					t.Errorf("GetAllNewsgroups() got %d groups, want %d", len(groups), len(tt.expected))
 				}
-				// Loop carefully, only if lengths match and expected is not empty
 				if len(groups) == len(tt.expected) && len(tt.expected) > 0 {
 					for i, g := range groups {
 						if g.ID != tt.expected[i].ID || g.Name != tt.expected[i].Name || g.Description != tt.expected[i].Description {
@@ -108,6 +108,8 @@ func TestDB_GetGroupActivityStats(t *testing.T) {
 		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
 	defer mockDB.Close()
+	ctx := context.Background()
+
 
 	groupID := uint16(1)
 	lookbackDays := 30
@@ -136,7 +138,7 @@ func TestDB_GetGroupActivityStats(t *testing.T) {
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(query).WithArgs(groupID, lookbackDays).WillReturnRows(sqlmock.NewRows([]string{"COUNT(*)"}).AddRow(15))
 			},
-			expectedAvgPosts:    0.5, // 15 posts / 30 days
+			expectedAvgPosts:    0.5,
 			expectedTotalPosts:  15,
 			expectedHasActivity: true,
 			expectErr:           false,
@@ -157,7 +159,7 @@ func TestDB_GetGroupActivityStats(t *testing.T) {
 			name:            "error - invalid lookbackDays",
 			groupID:         groupID,
 			lookbackDays:    0,
-			setupMock:       func(mock sqlmock.Sqlmock) { /* No DB call expected */ },
+			setupMock:       func(mock sqlmock.Sqlmock) { },
 			expectErr:       true,
 			expectErrMsg:    "lookbackDays must be positive",
 		},
@@ -176,7 +178,7 @@ func TestDB_GetGroupActivityStats(t *testing.T) {
 			groupID:         groupID,
 			lookbackDays:    lookbackDays,
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(query).WithArgs(groupID, lookbackDays).WillReturnRows(sqlmock.NewRows([]string{"COUNT(*)"}).AddRow(15)) // Expect query only once, .Times(1) is default
+				mock.ExpectQuery(query).WithArgs(groupID, lookbackDays).WillReturnRows(sqlmock.NewRows([]string{"COUNT(*)"}).AddRow(15))
 			},
 			expectedAvgPosts:    0.5,
 			expectedTotalPosts:  15,
@@ -188,19 +190,15 @@ func TestDB_GetGroupActivityStats(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create a minimal config for tests that might use db.cfg
-			// For this test, LogSQLQueries isn't the focus, but good to have a non-nil cfg.
-			testCfg := &config.Config{CacheTTLSeconds: 10} // Short TTL for cache test if needed, though GetGroupActivityStats uses fixed 1hr
+			testCfg := &config.Config{CacheTTLSeconds: 10}
 			db := NewWithSQLDB(mockDB, testCfg)
 			tt.setupMock(mock)
 
-			avg, total, active, err := db.GetGroupActivityStats(tt.groupID, tt.lookbackDays)
+			avg, total, active, err := db.GetGroupActivityStats(ctx, tt.groupID, tt.lookbackDays) // Pass context
 
 			if (err != nil) != tt.expectErr {
 				t.Errorf("GetGroupActivityStats() error = %v, expectErr %v", err, tt.expectErr)
-				if err != nil {
-					t.Logf("Actual error message: %s", err.Error())
-				}
+				if err != nil { t.Logf("Actual error message: %s", err.Error()) }
 				return
 			}
 			if tt.expectErr {
@@ -210,32 +208,16 @@ func TestDB_GetGroupActivityStats(t *testing.T) {
 				return
 			}
 
-			if active != tt.expectedHasActivity {
-				t.Errorf("GetGroupActivityStats() hasRecentActivity = %v, want %v", active, tt.expectedHasActivity)
-			}
-			if total != tt.expectedTotalPosts {
-				t.Errorf("GetGroupActivityStats() totalPostsInPeriod = %d, want %d", total, tt.expectedTotalPosts)
-			}
-			// Compare floats with a small tolerance if exact match is problematic, but for simple division it should be fine.
-			if avg != tt.expectedAvgPosts {
-				t.Errorf("GetGroupActivityStats() avgPosts = %f, want %f", avg, tt.expectedAvgPosts)
-			}
+			if active != tt.expectedHasActivity { t.Errorf("GetGroupActivityStats() hasRecentActivity = %v, want %v", active, tt.expectedHasActivity) }
+			if total != tt.expectedTotalPosts { t.Errorf("GetGroupActivityStats() totalPostsInPeriod = %d, want %d", total, tt.expectedTotalPosts) }
+			if avg != tt.expectedAvgPosts { t.Errorf("GetGroupActivityStats() avgPosts = %f, want %f", avg, tt.expectedAvgPosts) }
 
 			if tt.runTwiceForCacheCheck {
-				// Call again, should hit cache if setupMock expected only one call.
-				avg2, total2, active2, err2 := db.GetGroupActivityStats(tt.groupID, tt.lookbackDays)
-				if err2 != nil {
-					t.Errorf("GetGroupActivityStats() (cache check) unexpected error: %v", err2)
-				}
-				if active2 != tt.expectedHasActivity {
-					t.Errorf("GetGroupActivityStats() (cache check) hasRecentActivity = %v, want %v", active2, tt.expectedHasActivity)
-				}
-				if total2 != tt.expectedTotalPosts {
-					t.Errorf("GetGroupActivityStats() (cache check) totalPostsInPeriod = %d, want %d", total2, tt.expectedTotalPosts)
-				}
-				if avg2 != tt.expectedAvgPosts {
-					t.Errorf("GetGroupActivityStats() (cache check) avgPosts = %f, want %f", avg2, tt.expectedAvgPosts)
-				}
+				avg2, total2, active2, err2 := db.GetGroupActivityStats(ctx, tt.groupID, tt.lookbackDays) // Pass context
+				if err2 != nil { t.Errorf("GetGroupActivityStats() (cache check) unexpected error: %v", err2) }
+				if active2 != tt.expectedHasActivity { t.Errorf("GetGroupActivityStats() (cache check) hasRecentActivity = %v, want %v", active2, tt.expectedHasActivity) }
+				if total2 != tt.expectedTotalPosts { t.Errorf("GetGroupActivityStats() (cache check) totalPostsInPeriod = %d, want %d", total2, tt.expectedTotalPosts) }
+				if avg2 != tt.expectedAvgPosts { t.Errorf("GetGroupActivityStats() (cache check) avgPosts = %f, want %f", avg2, tt.expectedAvgPosts) }
 			}
 
 			if err := mock.ExpectationsWereMet(); err != nil {
@@ -251,6 +233,7 @@ func TestDB_GetLatestMessageMonthForGroup(t *testing.T) {
 		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
 	defer mockDB.Close()
+	ctx := context.Background()
 
 	groupName := "test.group.latest"
 	var groupID uint16 = 7
@@ -269,7 +252,7 @@ func TestDB_GetLatestMessageMonthForGroup(t *testing.T) {
 		expectedYear  int
 		expectedMonth int
 		expectedFound bool
-		runTwiceForCacheCheck bool // If true, run the DB call twice to check cache
+		runTwiceForCacheCheck bool
 	}{
 		{
 			name: "success - latest month found",
@@ -278,9 +261,7 @@ func TestDB_GetLatestMessageMonthForGroup(t *testing.T) {
 				dbMock.ExpectQuery(latestMonthQuery).WithArgs(groupID).
 					WillReturnRows(sqlmock.NewRows([]string{"YEAR(received)", "MONTH(received)"}).AddRow(2024, 7))
 			},
-			expectedYear:  2024,
-			expectedMonth: 7,
-			expectedFound: true,
+			expectedYear:  2024, expectedMonth: 7, expectedFound: true,
 		},
 		{
 			name: "group found, but no messages",
@@ -302,7 +283,7 @@ func TestDB_GetLatestMessageMonthForGroup(t *testing.T) {
 			setupMock: func(dbMock sqlmock.Sqlmock) {
 				dbMock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnError(errors.New("db group error"))
 			},
-			expectedFound: false, // Expect found=false on error
+			expectedFound: false,
 		},
 		{
 			name: "error querying latest month",
@@ -310,57 +291,41 @@ func TestDB_GetLatestMessageMonthForGroup(t *testing.T) {
 				dbMock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID))
 				dbMock.ExpectQuery(latestMonthQuery).WithArgs(groupID).WillReturnError(errors.New("db article error"))
 			},
-			expectedFound: false, // Expect found=false on error
+			expectedFound: false,
 		},
 		{
 			name: "cache hit - latest month found",
 			setupMock: func(dbMock sqlmock.Sqlmock) {
-				// First call populates cache (mocked once)
 				dbMock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID))
 				dbMock.ExpectQuery(latestMonthQuery).WithArgs(groupID).
 					WillReturnRows(sqlmock.NewRows([]string{"YEAR(received)", "MONTH(received)"}).AddRow(2024, 7))
-				// Second call should hit cache, so no more DB interactions expected by sqlmock for this specific sub-test run
 			},
-			expectedYear:  2024,
-			expectedMonth: 7,
-			expectedFound: true,
-			runTwiceForCacheCheck: true,
+			expectedYear:  2024, expectedMonth: 7, expectedFound: true, runTwiceForCacheCheck: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db := NewWithSQLDB(mockDB, nil) // New DB (and cache) for each sub-test, pass nil for config
+			db := NewWithSQLDB(mockDB, nil)
 			tt.setupMock(mock)
+			year, month, found := db.GetLatestMessageMonthForGroup(ctx, groupName) // Pass context
 
-			year, month, found := db.GetLatestMessageMonthForGroup(groupName)
-
-			if found != tt.expectedFound {
-				t.Errorf("GetLatestMessageMonthForGroup() found = %v, want %v", found, tt.expectedFound)
-			}
+			if found != tt.expectedFound { t.Errorf("GetLatestMessageMonthForGroup() found = %v, want %v", found, tt.expectedFound) }
 			if tt.expectedFound {
 				if year != tt.expectedYear || month != tt.expectedMonth {
 					t.Errorf("GetLatestMessageMonthForGroup() year = %d, month = %d, want year = %d, month = %d", year, month, tt.expectedYear, tt.expectedMonth)
 				}
 			}
-
 			if tt.runTwiceForCacheCheck {
-				// Call again, should hit cache. setupMock already prepared expectations for the first call.
-				// No new DB calls should be made if cache works.
-				year2, month2, found2 := db.GetLatestMessageMonthForGroup(groupName)
-				if found2 != tt.expectedFound {
-					t.Errorf("GetLatestMessageMonthForGroup() (cache check) found = %v, want %v", found2, tt.expectedFound)
-				}
+				year2, month2, found2 := db.GetLatestMessageMonthForGroup(ctx, groupName) // Pass context
+				if found2 != tt.expectedFound { t.Errorf("GetLatestMessageMonthForGroup() (cache check) found = %v, want %v", found2, tt.expectedFound) }
 				if tt.expectedFound {
 					if year2 != tt.expectedYear || month2 != tt.expectedMonth {
 						t.Errorf("GetLatestMessageMonthForGroup() (cache check) year = %d, month = %d, want year = %d, month = %d", year2, month2, tt.expectedYear, tt.expectedMonth)
 					}
 				}
 			}
-
-			if err := mock.ExpectationsWereMet(); err != nil {
-				t.Errorf("sqlmock expectations were not met: %s", err)
-			}
+			if err := mock.ExpectationsWereMet(); err != nil { t.Errorf("sqlmock expectations were not met: %s", err) }
 		})
 	}
 }
@@ -371,6 +336,7 @@ func TestDB_GetArticleByDetails(t *testing.T) {
 		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
 	defer mockDB.Close()
+	ctx := context.Background()
 
 	groupName := "rec.arts.books"
 	var groupID uint16 = 3
@@ -378,7 +344,6 @@ func TestDB_GetArticleByDetails(t *testing.T) {
 	sampleReceived := time.Date(year, time.Month(month), 10, 0, 0, 0, 0, time.UTC)
 	rawRefsOriginal := "<ref1@host> <ref2@domain>"
 	parsedRefsOriginal := models.ParseReferencesString(rawRefsOriginal)
-
 
 	groupQuery := regexp.QuoteMeta("SELECT id FROM `groups` WHERE name = ?")
 	articleDetailsQuery := regexp.QuoteMeta(`
@@ -394,24 +359,15 @@ func TestDB_GetArticleByDetails(t *testing.T) {
 		FROM articles
 		WHERE group_id = ? AND id = ?
 		LIMIT 1`)
-
 	articleCols := []string{"group_id", "id", "h_messageid", "h_subject", "h_from", "h_date", "received", "thread_id", "parent", "h_references", "h_lines", "h_bytes"}
 
 	tests := []struct {
-		name           string
-		groupName      string
-		year           int
-		month          int
-		articleNum     uint32
-		setupMock      func(mock sqlmock.Sqlmock)
-		expectArticle  *models.Article
-		expectErr      bool
-		expectErrMsg   string
-		checkReceived  bool
+		name           string; groupName      string; year           int; month          int; articleNum     uint32
+		setupMock      func(mock sqlmock.Sqlmock); expectArticle  *models.Article
+		expectErr      bool; expectErrMsg   string; checkReceived  bool
 	}{
 		{
-			name:      "success - article found with correct date",
-			groupName: groupName, year: year, month: month, articleNum: articleNum,
+			name: "success - article found with correct date", groupName: groupName, year: year, month: month, articleNum: articleNum,
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID))
 				mock.ExpectQuery(articleDetailsQuery).WithArgs(groupID, articleNum, year, month).
@@ -419,12 +375,10 @@ func TestDB_GetArticleByDetails(t *testing.T) {
 						AddRow(groupID, articleNum, "msg1@host.com", "Subj", "From", "DateStr", sampleReceived, uint32(123), uint32(0), rawRefsOriginal, uint32(10), uint32(100)))
 			},
 			expectArticle: &models.Article{GroupID: groupID, ArticleNum: articleNum, MessageID: "msg1@host.com", Subject: "Subj", From: "From", Date: "DateStr", Received: sampleReceived, ThreadID: 123, GroupName: groupName, RawReferences: rawRefsOriginal, References: parsedRefsOriginal, Lines: 10, Bytes: 100},
-			expectErr:     false,
-			checkReceived: true,
+			expectErr: false, checkReceived: true,
 		},
 		{
-			name:      "article not found with specific date, but found with relaxed date (redirect case)",
-			groupName: groupName, year: year, month: month, articleNum: articleNum,
+			name: "article not found with specific date, but found with relaxed date (redirect case)", groupName: groupName, year: year, month: month, articleNum: articleNum,
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID))
 				mock.ExpectQuery(articleDetailsQuery).WithArgs(groupID, articleNum, year, month).WillReturnError(sql.ErrNoRows)
@@ -434,28 +388,23 @@ func TestDB_GetArticleByDetails(t *testing.T) {
 						AddRow(groupID, articleNum, "msg1@host.com", "Subj", "From", "DateStr", differentReceived, uint32(123), uint32(0), rawRefsOriginal, uint32(10), uint32(100)))
 			},
 			expectArticle: &models.Article{GroupID: groupID, ArticleNum: articleNum, MessageID: "msg1@host.com", Subject: "Subj", From: "From", Date: "DateStr", Received: time.Date(2023, 12, 15, 0,0,0,0, time.UTC), ThreadID: 123, GroupName: groupName, RawReferences: rawRefsOriginal, References: parsedRefsOriginal, Lines: 10, Bytes: 100},
-			expectErr:     false,
-			checkReceived: true,
+			expectErr: false, checkReceived: true,
 		},
 		{
-			name:      "article truly not found (not with specific date, not with relaxed date)",
-			groupName: groupName, year: year, month: month, articleNum: articleNum,
+			name: "article truly not found (not with specific date, not with relaxed date)", groupName: groupName, year: year, month: month, articleNum: articleNum,
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID))
 				mock.ExpectQuery(articleDetailsQuery).WithArgs(groupID, articleNum, year, month).WillReturnError(sql.ErrNoRows)
 				mock.ExpectQuery(relaxedArticleDetailsQuery).WithArgs(groupID, articleNum).WillReturnError(sql.ErrNoRows)
 			},
-			expectErr:    true,
-			expectErrMsg: fmt.Sprintf("article num %d in group '%s' (year %d, month %d) not found", articleNum, groupName, year, month),
+			expectErr: true, expectErrMsg: fmt.Sprintf("article num %d in group '%s' (year %d, month %d) not found", articleNum, groupName, year, month),
 		},
 		{
-			name:      "group not found",
-			groupName: "unknown.group", year: year, month: month, articleNum: articleNum,
+			name: "group not found", groupName: "unknown.group", year: year, month: month, articleNum: articleNum,
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(groupQuery).WithArgs("unknown.group").WillReturnError(sql.ErrNoRows)
 			},
-			expectErr:    true,
-			expectErrMsg: "group 'unknown.group' not found",
+			expectErr: true, expectErrMsg: "group 'unknown.group' not found",
 		},
 	}
 
@@ -463,33 +412,16 @@ func TestDB_GetArticleByDetails(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			db := NewWithSQLDB(mockDB, nil)
 			tt.setupMock(mock)
-			article, err := db.GetArticleByDetails(tt.groupName, tt.year, tt.month, tt.articleNum)
+			article, err := db.GetArticleByDetails(ctx, tt.groupName, tt.year, tt.month, tt.articleNum) // Pass context
 
-			if (err != nil) != tt.expectErr {
-				t.Errorf("GetArticleByDetails() error = %v, expectErr %v", err, tt.expectErr)
-				return
-			}
-			if tt.expectErr {
-				if !strings.Contains(err.Error(), tt.expectErrMsg) {
-					t.Errorf("GetArticleByDetails() error message = '%s', want to contain '%s'", err.Error(), tt.expectErrMsg)
-				}
-				return
-			}
-			if !reflect.DeepEqual(article, tt.expectArticle) {
-                 if !(article == nil && tt.expectArticle == nil) {
-				    t.Errorf("GetArticleByDetails() got = \n%+v, want \n%+v", article, tt.expectArticle)
-                 }
-			}
-			if tt.checkReceived && article != nil && tt.expectArticle != nil && !article.Received.Equal(tt.expectArticle.Received) {
-				t.Errorf("GetArticleByDetails() Received date mismatch: got %v, want %v", article.Received, tt.expectArticle.Received)
-			}
-			if err := mock.ExpectationsWereMet(); err != nil {
-				t.Errorf("sqlmock expectations were not met: %s", err)
-			}
+			if (err != nil) != tt.expectErr { t.Errorf("GetArticleByDetails() error = %v, expectErr %v", err, tt.expectErr); return }
+			if tt.expectErr { if !strings.Contains(err.Error(), tt.expectErrMsg) { t.Errorf("GetArticleByDetails() error message = '%s', want to contain '%s'", err.Error(), tt.expectErrMsg) }; return }
+			if !reflect.DeepEqual(article, tt.expectArticle) { if !(article == nil && tt.expectArticle == nil) { t.Errorf("GetArticleByDetails() got = \n%+v, want \n%+v", article, tt.expectArticle) } }
+			if tt.checkReceived && article != nil && tt.expectArticle != nil && !article.Received.Equal(tt.expectArticle.Received) { t.Errorf("GetArticleByDetails() Received date mismatch: got %v, want %v", article.Received, tt.expectArticle.Received) }
+			if err := mock.ExpectationsWereMet(); err != nil { t.Errorf("sqlmock expectations were not met: %s", err) }
 		})
 	}
 }
-
 
 func TestDB_GetArticleByMessageID(t *testing.T) {
 	mockDB, mock, err := sqlmock.New()
@@ -497,6 +429,7 @@ func TestDB_GetArticleByMessageID(t *testing.T) {
 		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
 	defer mockDB.Close()
+	ctx := context.Background()
 
 	messageID := "unique.msg.id@example.com"
 	sampleReceived := time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC)
@@ -514,41 +447,28 @@ func TestDB_GetArticleByMessageID(t *testing.T) {
 		LIMIT 1`)
 
 	tests := []struct {
-		name          string
-		messageID     string
-		setupMock     func(mock sqlmock.Sqlmock)
-		expectArticle *models.Article
-		expectErr     bool
-		expectErrMsg  string
+		name          string; messageID     string; setupMock      func(mock sqlmock.Sqlmock)
+		expectArticle *models.Article; expectErr     bool; expectErrMsg  string
 	}{
 		{
-			name:      "success - article found",
-			messageID: messageID,
+			name: "success - article found", messageID: messageID,
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(query).WithArgs(messageID).
 					WillReturnRows(sqlmock.NewRows(articleColsWithGroup).
 						AddRow(1, 101, messageID, "Found It", "Finder", "DateFound", sampleReceived, uint32(123), uint32(0), rawRefs, uint32(10), uint32(100), "found.group"))
 			},
 			expectArticle: &models.Article{GroupID: 1, ArticleNum: 101, MessageID: messageID, Subject: "Found It", From: "Finder", Date: "DateFound", Received: sampleReceived, ThreadID: 123, GroupName: "found.group", RawReferences: rawRefs, References: parsedRefs, Lines: 10, Bytes: 100},
-			expectErr:     false,
+			expectErr: false,
 		},
 		{
-			name:      "article not found by message id",
-			messageID: "nonexistent@msg.id",
-			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(query).WithArgs("nonexistent@msg.id").WillReturnError(sql.ErrNoRows)
-			},
-			expectErr:    true,
-			expectErrMsg: "article with Message-ID 'nonexistent@msg.id' not found",
+			name: "article not found by message id", messageID: "nonexistent@msg.id",
+			setupMock: func(mock sqlmock.Sqlmock) { mock.ExpectQuery(query).WithArgs("nonexistent@msg.id").WillReturnError(sql.ErrNoRows) },
+			expectErr: true, expectErrMsg: "article with Message-ID 'nonexistent@msg.id' not found",
 		},
 		{
-			name:      "database query error",
-			messageID: messageID,
-			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(query).WithArgs(messageID).WillReturnError(errors.New("db fault"))
-			},
-			expectErr:    true,
-			expectErrMsg: "failed to query article by Message-ID",
+			name: "database query error", messageID: messageID,
+			setupMock: func(mock sqlmock.Sqlmock) { mock.ExpectQuery(query).WithArgs(messageID).WillReturnError(errors.New("db fault")) },
+			expectErr: true, expectErrMsg: "failed to query article by Message-ID",
 		},
 	}
 
@@ -556,24 +476,12 @@ func TestDB_GetArticleByMessageID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			db := NewWithSQLDB(mockDB, nil)
 			tt.setupMock(mock)
-			article, err := db.GetArticleByMessageID(tt.messageID)
+			article, err := db.GetArticleByMessageID(ctx, tt.messageID) // Pass context
 
-			if (err != nil) != tt.expectErr {
-				t.Errorf("GetArticleByMessageID() error = %v, expectErr %v", err, tt.expectErr)
-				return
-			}
-			if tt.expectErr {
-				if !strings.Contains(err.Error(), tt.expectErrMsg) {
-					t.Errorf("GetArticleByMessageID() error message = '%s', want to contain '%s'", err.Error(), tt.expectErrMsg)
-				}
-				return
-			}
-			if !reflect.DeepEqual(article, tt.expectArticle) {
-				t.Errorf("GetArticleByMessageID() got = %+v, want %+v", article, tt.expectArticle)
-			}
-			if err := mock.ExpectationsWereMet(); err != nil {
-				t.Errorf("sqlmock expectations were not met: %s", err)
-			}
+			if (err != nil) != tt.expectErr { t.Errorf("GetArticleByMessageID() error = %v, expectErr %v", err, tt.expectErr); return }
+			if tt.expectErr { if !strings.Contains(err.Error(), tt.expectErrMsg) { t.Errorf("GetArticleByMessageID() error message = '%s', want to contain '%s'", err.Error(), tt.expectErrMsg) }; return }
+			if !reflect.DeepEqual(article, tt.expectArticle) { t.Errorf("GetArticleByMessageID() got = %+v, want %+v", article, tt.expectArticle) }
+			if err := mock.ExpectationsWereMet(); err != nil { t.Errorf("sqlmock expectations were not met: %s", err) }
 		})
 	}
 }
@@ -584,9 +492,10 @@ func TestDB_GetThreadMessages(t *testing.T) {
 		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
 	defer mockDB.Close()
+	ctx := context.Background()
 
-	threadIDToTest := uint32(789) // Test with a specific thread ID
-	groupIDToTest := uint16(1)    // Define a groupID for testing
+	threadIDToTest := uint32(789)
+	groupIDToTest := uint16(1)
 	sampleReceived1 := time.Date(2024, 1, 10, 10, 0, 0, 0, time.UTC)
 	sampleReceived2 := time.Date(2024, 1, 10, 11, 0, 0, 0, time.UTC)
 	cols := []string{"group_id", "id", "h_messageid", "h_subject", "h_from", "h_date", "received", "thread_id", "parent", "h_references", "h_lines", "h_bytes", "group_name"}
@@ -601,18 +510,12 @@ func TestDB_GetThreadMessages(t *testing.T) {
 		ORDER BY a.received ASC, a.id ASC`)
 
 	tests := []struct {
-		name                string
-		threadID            uint32
-		groupID             uint16 // Added groupID to test struct
-		setupMock           func(mock sqlmock.Sqlmock)
-		expectedArticles    []models.Article
-		expectErr           bool
-		expectErrMsg        string
+		name string; threadID uint32; groupID uint16
+		setupMock func(mock sqlmock.Sqlmock); expectedArticles []models.Article
+		expectErr bool; expectErrMsg string
 	}{
 		{
-			name: "success - all messages in thread returned for specific group",
-			threadID: threadIDToTest,
-			groupID: groupIDToTest,
+			name: "success - all messages in thread returned for specific group", threadID: threadIDToTest, groupID: groupIDToTest,
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows(cols).
 					AddRow(groupIDToTest, 101, "msg101@host", "Original Subj", "User0", "Date0", sampleReceived1.Add(-time.Hour), threadIDToTest, 0, "", 4, 40, "group1").
@@ -628,24 +531,14 @@ func TestDB_GetThreadMessages(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name: "success - no messages for threadID in specific group",
-			threadID: uint32(9999),
-			groupID: groupIDToTest,
-			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(query).WithArgs(uint32(9999), groupIDToTest).WillReturnRows(sqlmock.NewRows(cols))
-			},
-			expectedArticles: []models.Article{},
-			expectErr: false,
+			name: "success - no messages for threadID in specific group", threadID: uint32(9999), groupID: groupIDToTest,
+			setupMock: func(mock sqlmock.Sqlmock) { mock.ExpectQuery(query).WithArgs(uint32(9999), groupIDToTest).WillReturnRows(sqlmock.NewRows(cols)) },
+			expectedArticles: []models.Article{}, expectErr: false,
 		},
 		{
-			name: "database query error",
-			threadID: threadIDToTest,
-			groupID: groupIDToTest,
-			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(query).WithArgs(threadIDToTest, groupIDToTest).WillReturnError(errors.New("thread db fault"))
-			},
-			expectErr: true,
-			expectErrMsg: "failed to query thread messages for thread_id 789",
+			name: "database query error", threadID: threadIDToTest, groupID: groupIDToTest,
+			setupMock: func(mock sqlmock.Sqlmock) { mock.ExpectQuery(query).WithArgs(threadIDToTest, groupIDToTest).WillReturnError(errors.New("thread db fault")) },
+			expectErr: true, expectErrMsg: "failed to query thread messages for thread_id 789",
 		},
 	}
 
@@ -653,29 +546,13 @@ func TestDB_GetThreadMessages(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			db := NewWithSQLDB(mockDB, nil)
 			tt.setupMock(mock)
-			articles, err := db.GetThreadMessages(tt.threadID, tt.groupID) // Pass groupID
+			articles, err := db.GetThreadMessages(ctx, tt.threadID, tt.groupID) // Pass context
 
-			if (err != nil) != tt.expectErr {
-				t.Errorf("GetThreadMessages() error = %v, expectErr %v", err, tt.expectErr)
-				return
-			}
-			if tt.expectErr {
-				if !strings.Contains(err.Error(), tt.expectErrMsg) {
-					t.Errorf("GetThreadMessages() error message = '%s', want to contain '%s'", err.Error(), tt.expectErrMsg)
-				}
-				return
-			}
-			if len(articles) != len(tt.expectedArticles) {
-				t.Errorf("GetThreadMessages() got %d articles, want %d", len(articles), len(tt.expectedArticles))
-			}
-			for i := range articles {
-				if len(tt.expectedArticles) <= i || !reflect.DeepEqual(articles[i], tt.expectedArticles[i]) {
-					t.Errorf("GetThreadMessages() article %d = %+v, want %+v", i, articles[i], tt.expectedArticles[i])
-				}
-			}
-			if err := mock.ExpectationsWereMet(); err != nil {
-				t.Errorf("sqlmock expectations were not met: %s", err)
-			}
+			if (err != nil) != tt.expectErr { t.Errorf("GetThreadMessages() error = %v, expectErr %v", err, tt.expectErr); return }
+			if tt.expectErr { if !strings.Contains(err.Error(), tt.expectErrMsg) { t.Errorf("GetThreadMessages() error message = '%s', want to contain '%s'", err.Error(), tt.expectErrMsg) }; return }
+			if len(articles) != len(tt.expectedArticles) { t.Errorf("GetThreadMessages() got %d articles, want %d", len(articles), len(tt.expectedArticles)) }
+			for i := range articles { if len(tt.expectedArticles) <= i || !reflect.DeepEqual(articles[i], tt.expectedArticles[i]) { t.Errorf("GetThreadMessages() article %d = %+v, want %+v", i, articles[i], tt.expectedArticles[i]) } }
+			if err := mock.ExpectationsWereMet(); err != nil { t.Errorf("sqlmock expectations were not met: %s", err) }
 		})
 	}
 }
@@ -686,18 +563,18 @@ func TestDB_GetAllNewsgroups_ScanError(t *testing.T) {
 		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
 	defer mockDB.Close()
+	ctx := context.Background()
+
 
 	db := NewWithSQLDB(mockDB, nil)
-	// Manually crafted regex for sqlmock, escaping . and ()
 	queryRegex := `SELECT g\.id, g\.name, g\.description, last_post\.max_received_date FROM ` + "`groups`" + ` g LEFT JOIN \(SELECT group_id, MAX\(received\) as max_received_date FROM articles GROUP BY group_id\) last_post ON g\.id = last_post\.group_id ORDER BY g\.name`
 
-	// Rows must match the new query structure (4 columns)
 	rows := sqlmock.NewRows([]string{"id", "name", "description", "max_received_date"}).
-		AddRow(1, "comp.lang.go", "Go Programming Language", nil). // Valid row
-		AddRow("not-an-int", "another.group", "Another description", nil) // Row designed to cause scan error on 'id'
+		AddRow(1, "comp.lang.go", "Go Programming Language", nil).
+		AddRow("not-an-int", "another.group", "Another description", nil)
 
 	mock.ExpectQuery(queryRegex).WillReturnRows(rows)
-	_, err = db.GetAllNewsgroups()
+	_, err = db.GetAllNewsgroups(ctx) // Pass context
 	if err == nil {
 		t.Errorf("Expected an error from GetAllNewsgroups due to Scan failure, but got nil")
 	}
@@ -716,6 +593,8 @@ func TestDB_GetMinMaxMessageMonthsForGroup(t *testing.T) {
 		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
 	defer mockDB.Close()
+	ctx := context.Background()
+
 
 	groupName := "test.group"
 	var groupID uint16 = 1
@@ -727,13 +606,8 @@ func TestDB_GetMinMaxMessageMonthsForGroup(t *testing.T) {
 	tests := []struct {
 		name             string
 		setupMock        func(mock sqlmock.Sqlmock)
-		expectedMinYear  int
-		expectedMinMonth int
-		expectedMaxYear  int
-		expectedMaxMonth int
-		expectedFound    bool
-		expectErr        bool
-		expectErrMsg     string
+		expectedMinYear  int; expectedMinMonth int; expectedMaxYear  int; expectedMaxMonth int
+		expectedFound    bool; expectErr        bool; expectErrMsg     string
 	}{
 		{
 			name: "success - messages found",
@@ -744,8 +618,7 @@ func TestDB_GetMinMaxMessageMonthsForGroup(t *testing.T) {
 				maxDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 				mock.ExpectQuery(dateQuery).WithArgs(groupID).WillReturnRows(sqlmock.NewRows([]string{"MIN(received)", "MAX(received)"}).AddRow(minDate, maxDate))
 			},
-			expectedMinYear: 2023, expectedMinMonth: 5,
-			expectedMaxYear: 2024, expectedMaxMonth: 1,
+			expectedMinYear: 2023, expectedMinMonth: 5, expectedMaxYear: 2024, expectedMaxMonth: 1,
 			expectedFound: true, expectErr: false,
 		},
 		{
@@ -758,9 +631,7 @@ func TestDB_GetMinMaxMessageMonthsForGroup(t *testing.T) {
 		},
 		{
 			name: "group not found",
-			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnError(sql.ErrNoRows)
-			},
+			setupMock: func(mock sqlmock.Sqlmock) { mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnError(sql.ErrNoRows) },
 			expectErr: true, expectErrMsg: "group 'test.group' not found",
 		},
 		{
@@ -786,12 +657,12 @@ func TestDB_GetMinMaxMessageMonthsForGroup(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
             db := NewWithSQLDB(mockDB, nil)
 			tt.setupMock(mock)
-			minY, minM, maxY, maxM, found, err := db.GetMinMaxMessageMonthsForGroup(groupName)
+			minY, minM, maxY, maxM, found, err := db.GetMinMaxMessageMonthsForGroup(ctx, groupName) // Pass context
 
-			if (err != nil) != tt.expectErr { t.Errorf("GetMinMaxMessageMonthsForGroup() error = %v, expectErr %v", err, tt.expectErr); return }
-			if tt.expectErr { if !strings.Contains(err.Error(), tt.expectErrMsg) { t.Errorf("GetMinMaxMessageMonthsForGroup() error msg = '%s', want to contain '%s'", err.Error(), tt.expectErrMsg) }; return }
-			if found != tt.expectedFound { t.Errorf("GetMinMaxMessageMonthsForGroup() found = %v, want %v", found, tt.expectedFound) }
-			if found { if minY != tt.expectedMinYear || minM != tt.expectedMinMonth || maxY != tt.expectedMaxYear || maxM != tt.expectedMaxMonth { t.Errorf("GetMinMaxMessageMonthsForGroup() dates: got min %d-%d, max %d-%d; want min %d-%d, max %d-%d", minY, minM, maxY, maxM, tt.expectedMinYear, tt.expectedMinMonth, tt.expectedMaxYear, tt.expectedMaxMonth) } }
+            if (err != nil) != tt.expectErr { t.Errorf("GetMinMaxMessageMonthsForGroup() error = %v, expectErr %v", err, tt.expectErr); return }
+            if tt.expectErr { if !strings.Contains(err.Error(), tt.expectErrMsg) { t.Errorf("GetMinMaxMessageMonthsForGroup() error msg = '%s', want to contain '%s'", err.Error(), tt.expectErrMsg) }; return }
+            if found != tt.expectedFound { t.Errorf("GetMinMaxMessageMonthsForGroup() found = %v, want %v", found, tt.expectedFound) }
+            if found { if minY != tt.expectedMinYear || minM != tt.expectedMinMonth || maxY != tt.expectedMaxYear || maxM != tt.expectedMaxMonth { t.Errorf("GetMinMaxMessageMonthsForGroup() dates: got min %d-%d, max %d-%d; want min %d-%d, max %d-%d", minY, minM, maxY, maxM, tt.expectedMinYear, tt.expectedMinMonth, tt.expectedMaxYear, tt.expectedMaxMonth) } }
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Errorf("sqlmock expectations were not met: %s", err)
 			}
@@ -799,13 +670,13 @@ func TestDB_GetMinMaxMessageMonthsForGroup(t *testing.T) {
 	}
 }
 
-
 func TestDB_GetPrevMonthWithMessages(t *testing.T) {
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
 	defer mockDB.Close()
+	ctx := context.Background()
 
 	groupName := "test.group"
 	var groupID uint16 = 1
@@ -820,13 +691,9 @@ func TestDB_GetPrevMonthWithMessages(t *testing.T) {
 		LIMIT 1`)
 
 	tests := []struct{
-		name string
-		setupMock func(mock sqlmock.Sqlmock)
-		expectedYear int
-		expectedMonth int
-		expectedFound bool
-		expectErr bool
-		expectErrMsg string
+		name string; setupMock func(mock sqlmock.Sqlmock)
+		expectedYear int; expectedMonth int; expectedFound bool
+		expectErr bool; expectErrMsg string
 	}{
 		{
 			name: "success - prev month found",
@@ -849,9 +716,7 @@ func TestDB_GetPrevMonthWithMessages(t *testing.T) {
 		},
 		{
 			name: "group not found",
-			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnError(sql.ErrNoRows)
-			},
+			setupMock: func(mock sqlmock.Sqlmock) { mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnError(sql.ErrNoRows) },
 			expectErr: true, expectErrMsg: "group 'test.group' not found",
 		},
 	}
@@ -860,7 +725,7 @@ func TestDB_GetPrevMonthWithMessages(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
             db := NewWithSQLDB(mockDB, nil)
 			tt.setupMock(mock)
-			pY, pM, found, err := db.GetPrevMonthWithMessages(groupName, currentYear, currentMonth)
+			pY, pM, found, err := db.GetPrevMonthWithMessages(ctx, groupName, currentYear, currentMonth) // Pass context
             if (err != nil) != tt.expectErr { t.Errorf("GetPrevMonthWithMessages() error = %v, expectErr %v", err, tt.expectErr); return }
             if tt.expectErr { if !strings.Contains(err.Error(), tt.expectErrMsg) {t.Errorf("GetPrevMonthWithMessages() error msg = '%s', want to contain '%s'", err.Error(), tt.expectErrMsg)}; return }
             if found != tt.expectedFound { t.Errorf("GetPrevMonthWithMessages() found = %v, want %v", found, tt.expectedFound) }
@@ -876,6 +741,7 @@ func TestDB_GetNextMonthWithMessages(t *testing.T) {
 		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
 	defer mockDB.Close()
+	ctx := context.Background()
 
 	groupName := "test.group"
 	var groupID uint16 = 1
@@ -890,13 +756,9 @@ func TestDB_GetNextMonthWithMessages(t *testing.T) {
 		LIMIT 1`)
 
 	tests := []struct{
-		name string
-		setupMock func(mock sqlmock.Sqlmock)
-		expectedYear int
-		expectedMonth int
-		expectedFound bool
-		expectErr bool
-		expectErrMsg string
+		name string; setupMock func(mock sqlmock.Sqlmock)
+		expectedYear int; expectedMonth int; expectedFound bool
+		expectErr bool; expectErrMsg string
 	}{
 		{
 			name: "success - next month found",
@@ -922,7 +784,7 @@ func TestDB_GetNextMonthWithMessages(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
             db := NewWithSQLDB(mockDB, nil)
 			tt.setupMock(mock)
-			nY, nM, found, err := db.GetNextMonthWithMessages(groupName, currentYear, currentMonth)
+			nY, nM, found, err := db.GetNextMonthWithMessages(ctx, groupName, currentYear, currentMonth) // Pass context
             if (err != nil) != tt.expectErr { t.Errorf("GetNextMonthWithMessages() error = %v, expectErr %v", err, tt.expectErr); return }
             if tt.expectErr { if !strings.Contains(err.Error(), tt.expectErrMsg) {t.Errorf("GetNextMonthWithMessages() error msg = '%s', want to contain '%s'", err.Error(), tt.expectErrMsg)}; return }
             if found != tt.expectedFound { t.Errorf("GetNextMonthWithMessages() found = %v, want %v", found, tt.expectedFound) }
@@ -942,6 +804,7 @@ func TestDB_GetMessagesForGroupMonth(t *testing.T) {
 		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
 	defer mockDB.Close()
+	ctx := context.Background()
 
 	groupName := "comp.test"
 	year, month := 2024, 3
@@ -963,18 +826,12 @@ func TestDB_GetMessagesForGroupMonth(t *testing.T) {
 	sampleReceivedTime := time.Date(year, time.Month(month), 15, 10, 0, 0, 0, time.UTC)
 
 	tests := []struct {
-		name               string
-		groupName          string
-		year               int
-		month              int
-		setupMock          func(mock sqlmock.Sqlmock)
-		expectedArticles   []models.Article
-		expectErr          bool
-		expectedErrMsg     string
+		name string; groupName string; year int; month int
+		setupMock func(mock sqlmock.Sqlmock); expectedArticles []models.Article
+		expectErr bool; expectedErrMsg string
 	}{
 		{
-			name:      "success - messages found",
-			groupName: groupName, year: year, month: month,
+			name: "success - messages found", groupName: groupName, year: year, month: month,
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID))
 				articleRows := sqlmock.NewRows([]string{
@@ -989,11 +846,10 @@ func TestDB_GetMessagesForGroupMonth(t *testing.T) {
 				{GroupID: groupID, ArticleNum: 101, MessageID: "msg1@example.com", Subject: "Subject 1", From: "User1 <user1@example.com>", Date: "Date1", Received: sampleReceivedTime, ThreadID: 1, ParentNum: 0, RawReferences: rawRefs1, References: parsedRefs1, Lines: 10, Bytes: 100, GroupName: groupName},
 				{GroupID: groupID, ArticleNum: 102, MessageID: "msg2@example.com", Subject: "Subject 2", From: "User2 <user2@example.com>", Date: "Date2", Received: sampleReceivedTime.Add(-time.Hour), ThreadID: 2, ParentNum: 0, RawReferences: rawRefs2, References: parsedRefs2, Lines: 12, Bytes: 120, GroupName: groupName},
 			},
-			expectErr:            false,
+			expectErr: false,
 		},
 		{
-			name:      "success - no messages found for month",
-			groupName: groupName, year: year, month: month,
+			name: "success - no messages found for month", groupName: groupName, year: year, month: month,
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID))
 				emptyArticleRows := sqlmock.NewRows([]string{
@@ -1002,36 +858,25 @@ func TestDB_GetMessagesForGroupMonth(t *testing.T) {
 				})
 				mock.ExpectQuery(articleQuery).WithArgs(groupID, year, month).WillReturnRows(emptyArticleRows)
 			},
-			expectedArticles: []models.Article{},
-			expectErr:            false,
+			expectedArticles: []models.Article{}, expectErr: false,
 		},
 		{
-			name:      "group not found",
-			groupName: "unknown.group", year: year, month: month,
-			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(groupQuery).WithArgs("unknown.group").WillReturnError(sql.ErrNoRows)
-			},
-			expectErr:      true,
-			expectedErrMsg: "group 'unknown.group' not found",
+			name: "group not found", groupName: "unknown.group", year: year, month: month,
+			setupMock: func(mock sqlmock.Sqlmock) { mock.ExpectQuery(groupQuery).WithArgs("unknown.group").WillReturnError(sql.ErrNoRows) },
+			expectErr: true, expectedErrMsg: "group 'unknown.group' not found",
 		},
 		{
-			name:      "error querying group id",
-			groupName: groupName, year: year, month: month,
-			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnError(errors.New("db error during group lookup"))
-			},
-			expectErr:      true,
-			expectedErrMsg: "failed to query group ID",
+			name: "error querying group id", groupName: groupName, year: year, month: month,
+			setupMock: func(mock sqlmock.Sqlmock) { mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnError(errors.New("db error during group lookup")) },
+			expectErr: true, expectedErrMsg: "failed to query group ID",
 		},
 		{
-			name:      "error querying articles",
-			groupName: groupName, year: year, month: month,
+			name: "error querying articles", groupName: groupName, year: year, month: month,
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(groupQuery).WithArgs(groupName).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(groupID))
 				mock.ExpectQuery(articleQuery).WithArgs(groupID, year, month).WillReturnError(errors.New("db error during article lookup"))
 			},
-			expectErr:      true,
-			expectedErrMsg: "failed to query articles",
+			expectErr: true, expectedErrMsg: "failed to query articles",
 		},
     }
 
@@ -1039,19 +884,17 @@ func TestDB_GetMessagesForGroupMonth(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
             db := NewWithSQLDB(mockDB, nil)
 			tt.setupMock(mock)
-			articles, err := db.GetMessagesForGroupMonth(tt.groupName, tt.year, tt.month)
+			articles, err := db.GetMessagesForGroupMonth(ctx, tt.groupName, tt.year, tt.month) // Pass context
 
             if (err != nil) != tt.expectErr { t.Errorf("GetMessagesForGroupMonth() error = %v, expectErr %v", err, tt.expectErr); return }
             if tt.expectErr && err != nil { if !strings.Contains(err.Error(), tt.expectedErrMsg) {t.Errorf("GetMessagesForGroupMonth() error message = '%s', want to contain '%s'", err.Error(), tt.expectedErrMsg)}; return }
 			if len(articles) != len(tt.expectedArticles) {
 				t.Errorf("GetMessagesForGroupMonth() got %d articles, want %d", len(articles), len(tt.expectedArticles))
 			}
-			// Compare relevant fields, especially References
 			if len(articles) == len(tt.expectedArticles) && len(articles) > 0 {
 				for i := range articles {
-					// Must compare all relevant fields or use reflect.DeepEqual on the items after ensuring GroupName is set in expected.
-					tt.expectedArticles[i].GroupName = articles[i].GroupName // Ensure groupname matches for DeepEqual if it's set by func
-					if !reflect.DeepEqual(articles[i], tt.expectedArticles[i]) { // Full struct comparison
+					tt.expectedArticles[i].GroupName = articles[i].GroupName
+					if !reflect.DeepEqual(articles[i], tt.expectedArticles[i]) {
 						 t.Errorf("GetMessagesForGroupMonth() article %d mismatch.\nGot: %+v\nWant:%+v", i, articles[i], tt.expectedArticles[i])
 					}
 				}
@@ -1062,3 +905,5 @@ func TestDB_GetMessagesForGroupMonth(t *testing.T) {
 		})
 	}
 }
+
+[end of internal/database/database_test.go]

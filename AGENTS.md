@@ -37,4 +37,13 @@ When working on this Go project, please adhere to the following guidelines:
     *   Run `go mod tidy` to ensure `go.mod` and `go.sum` are up-to-date and consistent.
     *   Never commit compiled binaries (e.g., executables, `.o` files) into the version control system. Ensure your `.gitignore` is configured appropriately.
 
+9.  **Observability (OpenTelemetry)**:
+    *   The application can be configured to export traces and metrics using OpenTelemetry.
+    *   **Configuration Flags**:
+        *   `--otel-service-name="nntp-web"`: Sets the service name for telemetry data. (Env: `OTEL_SERVICE_NAME`)
+        *   `--otel-exporter-otlp-traces-endpoint=""`: Specifies the OTLP gRPC endpoint for traces (e.g., `localhost:4317`). If empty, tracing is disabled. (Env: `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`)
+        *   `--otel-metrics-enabled=true`: Enables the Prometheus metrics endpoint at `/metrics` on the main application port. (Env: `OTEL_METRICS_ENABLED`)
+    *   When troubleshooting performance issues, ensure tracing is enabled and configured to point to a relevant collector (e.g., Jaeger, Grafana Agent).
+    *   Metrics can be scraped by Prometheus from the `/metrics` endpoint.
+
 These guidelines may be updated as the project evolves.

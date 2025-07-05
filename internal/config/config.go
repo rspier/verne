@@ -27,6 +27,11 @@ type Config struct {
 	RecaptchaSiteKey     string
 	RateLimitThreshold   int
 	RateLimitPeriod      time.Duration
+
+	// OpenTelemetry (optional)
+	OTelServiceName                string
+	OTelExporterOTLPTracesEndpoint string // e.g., "localhost:4317" for gRPC
+	OTelMetricsEnabled             bool
 }
 
 // Load parses command-line flags and environment variables to populate the Config struct.
@@ -53,6 +58,11 @@ func Load() (*Config, error) {
 	rateLimitThreshold := flag.Int("ratelimit-threshold", 100, "Number of requests per period before CAPTCHA (env: RATELIMIT_THRESHOLD)")
 	rateLimitPeriod := flag.Duration("ratelimit-period", 15*time.Minute, "Time period for rate limit (e.g., 15m, 1h) (env: RATELIMIT_PERIOD)")
 
+	// OpenTelemetry flags
+	otelServiceName := flag.String("otel-service-name", "nntp-web", "OpenTelemetry service name (env: OTEL_SERVICE_NAME)")
+	otelExporterOTLPTracesEndpoint := flag.String("otel-exporter-otlp-traces-endpoint", "", "OpenTelemetry OTLP traces exporter endpoint (e.g., localhost:4317 for gRPC). If empty, tracing is disabled. (env: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT)")
+	otelMetricsEnabled := flag.Bool("otel-metrics-enabled", true, "Enable OpenTelemetry metrics endpoint (/metrics) (env: OTEL_METRICS_ENABLED)")
+
 	flag.Parse()
 
 	// Assign parsed values
@@ -71,6 +81,11 @@ func Load() (*Config, error) {
 	cfg.RecaptchaSiteKey = *recaptchaSiteKey
 	cfg.RateLimitThreshold = *rateLimitThreshold
 	cfg.RateLimitPeriod = *rateLimitPeriod
+
+	// Assign OpenTelemetry values
+	cfg.OTelServiceName = *otelServiceName
+	cfg.OTelExporterOTLPTracesEndpoint = *otelExporterOTLPTracesEndpoint
+	cfg.OTelMetricsEnabled = *otelMetricsEnabled
 
 	if cfg.RecaptchaSecret != "" && cfg.RecaptchaSiteKey != "" {
 		cfg.BotProtectionEnabled = true
