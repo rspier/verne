@@ -10,10 +10,12 @@ import (
 
 	"nntp-web/internal/config"
 	"nntp-web/internal/database"
-	"nntp-web/internal/nntpclient" // Package for concrete type and interface
 	"nntp-web/internal/models"
-	"github.com/gatherstars-com/jwz"
+	"nntp-web/internal/nntpclient" // Package for concrete type and interface
+	"nntp-web/internal/ratelimit"  // Added
 	"nntp-web/web/templates"
+
+	"github.com/gatherstars-com/jwz"
 	"os"     // For os.Stdout for webLogger
 	"errors" // Required for the new dict function
 )
@@ -215,15 +217,21 @@ func (a *jwzArticleAdapter) IsDummy() bool {
 
 // Server holds the dependencies for the HTTP server.
 type Server struct {
-	config     *config.Config
-	db         *database.DB
-	nntpClient nntpclient.NNTPClientInterface // Use the interface
-	router     *http.ServeMux
-	templates  *template.Template
+	config      *config.Config
+	db          *database.DB
+	nntpClient  nntpclient.NNTPClientInterface // Use the interface
+	router      *http.ServeMux
+	templates   *template.Template
+	rateLimiter *ratelimit.RateLimiter // For bot protection
 }
 
 // NewServer creates and configures a new server instance.
-func NewServer(cfg *config.Config, db *database.DB, nntpCli nntpclient.NNTPClientInterface) (*Server, error) {
+func NewServer(
+	cfg *config.Config,
+	db *database.DB,
+	nntpCli nntpclient.NNTPClientInterface,
+	rl *ratelimit.RateLimiter, // Added for bot protection, can be nil
+) (*Server, error) {
 	t := template.New("base").Funcs(template.FuncMap{
 		"dict": func(values ...interface{}) (map[string]interface{}, error) {
 			if len(values)%2 != 0 {
@@ -246,11 +254,12 @@ func NewServer(cfg *config.Config, db *database.DB, nntpCli nntpclient.NNTPClien
 	}
 
 	srv := &Server{
-		config:     cfg,
-		db:         db,
-		nntpClient: nntpCli,
-		router:     http.NewServeMux(),
-		templates:  parsedTemplates,
+		config:      cfg,
+		db:          db,
+		nntpClient:  nntpCli,
+		router:      http.NewServeMux(),
+		templates:   parsedTemplates,
+		rateLimiter: rl, // Store the rate limiter
 	}
 
 	srv.setupRoutes()
@@ -324,10 +333,12 @@ func (s *Server) ListenAndServe() error {
 	// Standard logger (STDERR) for this startup message
 	log.Printf("Server listening on http://localhost%s", addr)
 
-	// Wrap the main router with the logging middleware
-	loggedRouter := loggingMiddleware(s.router)
+	// Wrap the main router with the logging middleware first, then bot protection
+	handler := loggingMiddleware(s.router)
+	// Apply BotProtectionMiddleware (it will check internally if it's enabled)
+	handler = s.BotProtectionMiddleware(handler)
 
-	return http.ListenAndServe(addr, loggedRouter) // Use the wrapped router
+	return http.ListenAndServe(addr, handler)
 }
 
 func (s *Server) renderTemplate(w http.ResponseWriter, r *http.Request, name string, data interface{}) {

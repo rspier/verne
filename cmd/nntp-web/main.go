@@ -10,6 +10,7 @@ import (
 	"nntp-web/internal/config"
 	"nntp-web/internal/database"   // Added
 	"nntp-web/internal/nntpclient" // Added
+	"nntp-web/internal/ratelimit"  // Added
 	"nntp-web/internal/server"     // Added
 )
 
@@ -35,6 +36,23 @@ func main() {
 	log.Printf("  DB Name: %s", cfg.DBName)
 	log.Printf("  Server Port: %d", cfg.ServerPort)
 	log.Printf("  NNTP Server: %s", cfg.NNTPServer)
+	log.Printf("  Bot Protection Enabled: %t", cfg.BotProtectionEnabled)
+	if cfg.BotProtectionEnabled {
+		log.Printf("    Rate Limit Threshold: %d", cfg.RateLimitThreshold)
+		log.Printf("    Rate Limit Period: %s", cfg.RateLimitPeriod)
+		// Do not log RecaptchaSecret or RecaptchaSiteKey directly for security
+		log.Printf("    Recaptcha Site Key: %s", "**** (configured)") // Example of masking
+	}
+
+	// Initialize RateLimiter if bot protection is enabled
+	var rl *ratelimit.RateLimiter
+	if cfg.BotProtectionEnabled {
+		log.Println("Bot protection is enabled. Initializing rate limiter.")
+		rl = ratelimit.NewRateLimiter(cfg.RateLimitThreshold, cfg.RateLimitPeriod)
+		defer rl.Stop() // Ensure cleanup goroutine is stopped on shutdown
+	} else {
+		log.Println("Bot protection is disabled.")
+	}
 
 	// Initialize Cache
 	appCache := cache.NewCache()
@@ -66,7 +84,7 @@ func main() {
 
 
 	// Initialize HTTP Server
-	srv, err := server.NewServer(cfg, db, nntpCli) // Pass NNTP client to server
+	srv, err := server.NewServer(cfg, db, nntpCli, rl) // Pass RateLimiter (can be nil)
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
 	}
