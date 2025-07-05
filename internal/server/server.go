@@ -270,6 +270,7 @@ func (s *Server) setupRoutes() {
 		}
 	})
 	s.router.HandleFunc("/group/", s.routeGroupRequests) // This will handle all /group/* requests
+	s.router.HandleFunc("/robots.txt", s.handleRobotsTXT())
 }
 
 func (s *Server) routeGroupRequests(w http.ResponseWriter, r *http.Request) {

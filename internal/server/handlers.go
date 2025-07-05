@@ -135,6 +135,89 @@ func (s *Server) handleListGroups() http.HandlerFunc {
 	}
 }
 
+const robotsTXTContent = ` # Nobody should crawl these groups
+User-agent: *
+Disallow: /group/perl.cpan.testers/
+
+User-agent: *
+Disallow: /group/perl.daily-build.reports/
+
+# Allow well-behaved bots
+User-agent: Googlebot
+Allow: /
+
+User-agent: Applebot
+Allow: /
+
+# Block all unknown bots
+User-agent: *
+Disallow: /
+
+# Block known abusive blocks.
+User-agent: Yandex
+Disallow: /
+
+User-agent: Bytespider
+Disallow: /
+
+User-agent: DataForSeoBot
+Disallow: /
+
+User-agent: AhrefsBot
+Disallow: /
+
+User-agent: AhrefsSiteAudit
+Disallow: /
+
+User-agent: SemrushBot
+Disallow: /
+
+User-agent: SiteAuditBot
+Disallow: /
+
+User-agent: SemrushBot-BA
+Disallow: /
+
+User-agent: SemrushBot-SI
+Disallow: /
+
+User-agent: SemrushBot-SWA
+Disallow: /
+
+User-agent: SemrushBot-CT
+Disallow: /
+
+User-agent: SplitSignalBot
+Disallow: /
+
+User-agent: SemrushBot-COUB
+Disallow: /
+
+User-agent: GPTBot
+Disallow: /
+
+User-agent: PetalBot
+Disallow: /
+
+User-agent: DotBot
+Disallow: /
+
+User-Agent: ImagesiftBot
+Disallow: /
+`
+
+func (s *Server) handleRobotsTXT() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write([]byte(robotsTXTContent))
+		if err != nil {
+			// Log the error, but the headers and status are already sent.
+			log.Printf("Error writing robots.txt content: %v", err)
+		}
+	}
+}
+
 func (s *Server) handleListMessages() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/group/"), "/")
