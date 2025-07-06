@@ -16,11 +16,13 @@ import (
 	"nntp-web/web/templates"
 
 	"github.com/gatherstars-com/jwz"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"os"     // For os.Stdout for webLogger
 	"errors" // Required for the new dict function
 )
 
 var webLogger *log.Logger // For Apache-style logs
+const serviceName = "nntp-web" // Can be defined in a common place if used elsewhere
 
 func init() {
 	// Initialize webLogger to write to STDOUT without any prefix or flags from the standard log package.
@@ -334,11 +336,21 @@ func (s *Server) ListenAndServe() error {
 	log.Printf("Server listening on http://localhost%s", addr)
 
 	// Wrap the main router with the logging middleware first, then bot protection
-	handler := loggingMiddleware(s.router)
-	// Apply BotProtectionMiddleware (it will check internally if it's enabled)
-	handler = s.BotProtectionMiddleware(handler)
+	var handler http.Handler = s.router // Start with the main router
 
-	return http.ListenAndServe(addr, handler)
+	// Apply business logic/application-specific middlewares first (innermost)
+	handler = loggingMiddleware(handler) // Logging
+	handler = s.BotProtectionMiddleware(handler) // Bot protection
+
+	// Wrap with OpenTelemetry middleware (outermost or close to it)
+	// This ensures that the span covers as much of the request handling as possible,
+	// including other middlewares.
+	otelHandler := otelhttp.NewHandler(handler, serviceName+"-http",
+		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
+	)
+
+	log.Println("HTTP server tracing enabled with otelhttp.NewHandler")
+	return http.ListenAndServe(addr, otelHandler)
 }
 
 func (s *Server) renderTemplate(w http.ResponseWriter, r *http.Request, name string, data interface{}) {

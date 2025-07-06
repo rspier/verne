@@ -12,6 +12,8 @@ import (
 	"strings"                 // Added
 
 	_ "github.com/go-sql-driver/mysql" // MySQL driver
+	"github.com/XSAM/otelsql"
+	semconv "go.opentelemetry.io/otel/semconv/v1.25.0" // Trying semconv v1.25.0
 )
 
 // DB wraps the sql.DB connection pool and an optional cache.
@@ -33,11 +35,22 @@ func New(appCfg *config.Config, appCache *cache.Cache) (*DB, error) {
 		appCfg.DBName,
 	)
 
-	log.Printf("Connecting to database: %s@tcp(%s:%d)/%s", appCfg.DBUser, appCfg.DBHost, appCfg.DBPort, appCfg.DBName)
+	log.Printf("Connecting to database with XSAM/otelsql: %s@tcp(%s:%d)/%s", appCfg.DBUser, appCfg.DBHost, appCfg.DBPort, appCfg.DBName)
 
-	sqlDB, err := sql.Open("mysql", dsn)
+	// Use XSAM/otelsql.Open to wrap the mysql driver
+	// The driver name "mysql" is automatically wrapped by XSAM/otelsql if it's imported.
+	// Alternatively, one could use otelsql.Register to define a new driver name like "mysql-otel"
+	// and then use sql.Open("mysql-otel", dsn).
+	// For simplicity, otelsql.Open is used here.
+	sqlDB, err := otelsql.Open("mysql", dsn,
+		otelsql.WithAttributes(
+			semconv.DBSystemMySQL,
+			semconv.DBNameKey.String(appCfg.DBName), // Corrected usage for DB Name
+		),
+		// Add other options as needed, e.g., otelsql.WithTracerProvider(provider) if not using global
+	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database connection: %w", err)
+		return nil, fmt.Errorf("failed to open database connection with XSAM/otelsql: %w", err)
 	}
 
 	// Configure connection pool settings (optional, but good practice)

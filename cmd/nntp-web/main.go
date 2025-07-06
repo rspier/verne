@@ -1,10 +1,21 @@
 package main
 
 import (
+	"context"
 	// "fmt" // Was unused
 	"log"
 	"net/http" // For http.ErrServerClosed
 	"os"
+	"os/signal"
+	"syscall"
+	// "time" // No longer used directly in this file after OTel init changes
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 
 	"nntp-web/internal/cache"      // Added
 	"nntp-web/internal/config"
@@ -14,7 +25,75 @@ import (
 	"nntp-web/internal/server"     // Added
 )
 
+const (
+	serviceName = "nntp-web"
+)
+
+// initTracerProvider initializes an OTLP exporter and configures the trace provider.
+func initTracerProvider(ctx context.Context) (func(context.Context) error, error) {
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			// The service name used to display traces in backends
+			semconv.ServiceName(serviceName),
+		),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Set up a trace exporter
+	// OTLP gRPC Exporter
+	// Get endpoint from environment variable OTEL_EXPORTER_OTLP_ENDPOINT
+	// Default to localhost:4317 if not set
+	otelGRPCEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	if otelGRPCEndpoint == "" {
+		otelGRPCEndpoint = "localhost:4317"
+	}
+
+	log.Printf("Initializing OTLP gRPC exporter with endpoint: %s", otelGRPCEndpoint)
+	traceExporter, err := otlptracegrpc.New(ctx,
+		otlptracegrpc.WithInsecure(), // Use insecure connection for simplicity, configure TLS in production
+		otlptracegrpc.WithEndpoint(otelGRPCEndpoint),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Register the trace exporter with a BATCH span processor to aggregate spans before export.
+	bsp := sdktrace.NewBatchSpanProcessor(traceExporter)
+	tracerProvider := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.AlwaysSample()), // For development/testing, sample all traces
+		sdktrace.WithResource(res),
+		sdktrace.WithSpanProcessor(bsp),
+	)
+	otel.SetTracerProvider(tracerProvider)
+
+	// Set global propagator to W3C Trace Context (the default)
+	// and W3C Baggage, as recommended in the OpenTelemetry specs.
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+
+	// Return a shutdown function to ensure all spans are flushed before the application exits.
+	return tracerProvider.Shutdown, nil
+}
+
 func main() {
+	// Set up OpenTelemetry Tracing
+	// Handle shutdown signals to ensure telemetry is flushed.
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer cancel()
+
+	shutdownTracer, err := initTracerProvider(ctx)
+	if err != nil {
+		log.Fatalf("Failed to initialize OpenTelemetry tracer provider: %v", err)
+	}
+	defer func() {
+		if err := shutdownTracer(context.Background()); err != nil { // Use a new context for shutdown
+			log.Printf("Error shutting down tracer provider: %v", err)
+		}
+		log.Println("Tracer provider shut down.")
+	}()
+	log.Println("OpenTelemetry tracer provider initialized.")
+
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
