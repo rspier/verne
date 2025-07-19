@@ -2,7 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 )
 
@@ -33,13 +37,15 @@ func (a *API) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = a.store.CreateMessage(msg.ChannelID, msg.UserID, msg.Content)
+	sanitizedContent := Sanitize(msg.Content)
+
+	_, err = a.store.CreateMessage(msg.ChannelID, msg.UserID, sanitizedContent)
 	if err != nil {
 		http.Error(w, "Failed to create message", http.StatusInternalServerError)
 		return
 	}
 
-	a.broker.messages <- msg.Content
+	a.broker.messages <- sanitizedContent
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -55,7 +61,6 @@ func (a *API) handleGetMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement GetMessagesByChannelID in store.go
 	messages, err := a.store.GetMessagesByChannelID(channelID)
 	if err != nil {
 		http.Error(w, "Failed to get messages", http.StatusInternalServerError)
@@ -63,4 +68,40 @@ func (a *API) handleGetMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(messages)
+}
+
+func (a *API) handleUploadImage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	file, handler, err := r.FormFile("image")
+	if err != nil {
+		http.Error(w, "Failed to get file from form", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	err = os.MkdirAll("./uploads", os.ModePerm)
+	if err != nil {
+		http.Error(w, "Failed to create uploads directory", http.StatusInternalServerError)
+		return
+	}
+
+	f, err := os.OpenFile(filepath.Join("./uploads", handler.Filename), os.O_WRONLY|os.O_CREATE, 0666)
+	if err != nil {
+		http.Error(w, "Failed to open file for writing", http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+
+	_, err = io.Copy(f, file)
+	if err != nil {
+		http.Error(w, "Failed to copy file", http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("file uploaded successfully", "filename", handler.Filename)
+	json.NewEncoder(w).Encode(map[string]string{"url": "/uploads/" + handler.Filename})
 }

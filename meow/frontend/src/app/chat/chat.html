@@ -1,7 +1,25 @@
-<div class="messages">
-  <app-message *ngFor="let message of messages" [message]="message"></app-message>
+<div class="sidebar">
+  <h2>Channels</h2>
+  <ul>
+    <li *ngFor="let channel of channels" (click)="switchChannel(channel)" [class.active]="channel === activeChannel">
+      #{{ channel.name }}
+    </li>
+  </ul>
+  <h2>Direct Messages</h2>
+  <ul>
+    <li *ngFor="let dm of dms" (click)="switchChannel(dm)" [class.active]="dm === activeChannel">
+      {{ dm.name }}
+    </li>
+  </ul>
 </div>
-<div class="message-input">
-  <input type="text" placeholder="Type your message...">
-  <button>Send</button>
+<div class="main-content">
+  <div class="messages">
+    <app-message *ngFor="let message of messages" [message]="message"></app-message>
+  </div>
+  <div class="message-input">
+    <quill-editor [(ngModel)]="messageContent" [modules]="quillConfig"></quill-editor>
+    <input type="file" (change)="onFileSelected($event)" #fileInput style="display: none;">
+    <button (click)="fileInput.click()">Upload Image</button>
+    <button (click)="sendMessage()">Send</button>
+  </div>
 </div>

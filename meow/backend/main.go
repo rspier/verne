@@ -34,6 +34,8 @@ func main() {
 	mux.Handle("/events", broker)
 	mux.HandleFunc("/messages", api.handleGetMessages)
 	mux.HandleFunc("/messages/send", api.handleSendMessage)
+	mux.HandleFunc("/upload", api.handleUploadImage)
+	mux.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir("./uploads"))))
 
 	slog.Info("starting server", "port", 8080)
 	if err := http.ListenAndServe(":8080", mux); err != nil {

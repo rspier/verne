@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -69,4 +71,42 @@ func TestAPI(t *testing.T) {
 	if len(messages) != 1 {
 		t.Errorf("expected 1 message, got %d", len(messages))
 	}
+
+	// Test handleUploadImage
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	fw, err := w.CreateFormFile("image", "test.jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.WriteString(fw, "test image data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+
+	req, err = http.NewRequest("POST", "/upload", &b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+
+	rr = httptest.NewRecorder()
+	handler = http.HandlerFunc(api.handleUploadImage)
+	handler.ServeHTTP(rr, req)
+
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			status, http.StatusOK)
+	}
+
+	var resp map[string]string
+	json.NewDecoder(rr.Body).Decode(&resp)
+
+	if resp["url"] != "/uploads/test.jpg" {
+		t.Errorf("expected url to be /uploads/test.jpg, got %s", resp["url"])
+	}
+
+	// Cleanup
+	os.RemoveAll("./uploads")
 }
