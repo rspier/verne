@@ -1,0 +1,10 @@
+<div class="message">
+  <img [src]="message.user.avatar_url" alt="User avatar" class="avatar">
+  <div class="message-content">
+    <div class="message-header">
+      <span class="username">{{ message.user.name }}</span>
+      <span class="timestamp">{{ message.timestamp | date:'short' }}</span>
+    </div>
+    <p class="content">{{ message.content }}</p>
+  </div>
+</div>
