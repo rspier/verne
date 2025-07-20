@@ -14,6 +14,7 @@ describe('MessageComponent', () => {
 
     fixture = TestBed.createComponent(MessageComponent);
     component = fixture.componentInstance;
+    component.message = { user: 'testUser', timestamp: new Date(), text: 'testMessage' };
     fixture.detectChanges();
   });
 
