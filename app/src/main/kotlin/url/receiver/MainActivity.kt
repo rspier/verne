@@ -27,7 +27,7 @@ class MainActivity : AppCompatActivity() {
                 val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(modifiedUrl))
                 startActivity(browserIntent)
             } else {
-                Toast.makeText(this, "Invalid URL", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Invalid URL: $sharedText", Toast.LENGTH_SHORT).show()
             }
             finish()
         } else {

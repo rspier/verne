@@ -44,7 +44,7 @@ class MainActivityTest {
 
         val scenario = ActivityScenario.launch<MainActivity>(intent)
         scenario.onActivity { activity ->
-            assertEquals("Invalid URL", ShadowToast.getTextOfLatestToast())
+            assertEquals("Invalid URL: not a valid url", ShadowToast.getTextOfLatestToast())
             assertTrue("Expected the activity to finish", activity.isFinishing)
         }
     }
