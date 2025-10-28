@@ -18,7 +18,43 @@ import org.robolectric.shadows.ShadowToast
 class MainActivityTest {
 
     @Test
-    fun `when valid url is shared, it should open the browser with the modified url`() {
+    fun `when url is in data field, it should open the browser`() {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            data = Uri.parse("https://www.google.com")
+        }
+
+        val scenario = ActivityScenario.launch<MainActivity>(intent)
+        scenario.onActivity { activity ->
+            val shadowActivity = Shadows.shadowOf(activity)
+            val nextStartedActivity = shadowActivity.nextStartedActivity
+            assertNotNull("Expected an activity to be started", nextStartedActivity)
+            assertEquals(Intent.ACTION_VIEW, nextStartedActivity.action)
+            assertEquals("https://archive.is/newest/https://www.google.com", nextStartedActivity.data.toString())
+            assertTrue("Expected the activity to finish", activity.isFinishing)
+        }
+    }
+
+    @Test
+    fun `when url is in extra text, it should open the browser`() {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, "Check out this cool site: https://www.google.com")
+        }
+
+        val scenario = ActivityScenario.launch<MainActivity>(intent)
+        scenario.onActivity { activity ->
+            val shadowActivity = Shadows.shadowOf(activity)
+            val nextStartedActivity = shadowActivity.nextStartedActivity
+            assertNotNull("Expected an activity to be started", nextStartedActivity)
+            assertEquals(Intent.ACTION_VIEW, nextStartedActivity.action)
+            assertEquals("https://archive.is/newest/https://www.google.com", nextStartedActivity.data.toString())
+            assertTrue("Expected the activity to finish", activity.isFinishing)
+        }
+    }
+
+    @Test
+    fun `when only extra text is provided, it should open the browser`() {
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_TEXT, "https://www.google.com")
