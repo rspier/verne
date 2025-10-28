@@ -2,9 +2,9 @@ name: Android CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "relinker" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "relinker" ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
