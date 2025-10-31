@@ -28,10 +28,10 @@ The Android SDK is not pre-installed in the environment and must be set up manua
 
 ### 2. Configure `local.properties`
 
-Create a `local.properties` file in the project root with the following content:
+Create a `local.properties` file in the project root with the following content. **Note:** Replace `YOUR_USERNAME` with your actual username.
 
 ```
-sdk.dir=/home/jules/.android/sdk
+sdk.dir=/home/YOUR_USERNAME/.android/sdk
 ```
 
 ### 3. Accept SDK Licenses
