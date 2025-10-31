@@ -44,10 +44,17 @@ yes | ~/.android/sdk/cmdline-tools/latest/bin/sdkmanager --licenses
 
 ## Building the Project
 
-Due to limitations on the number of files that can be generated, running a full Gradle build (`./gradlew :app:assembleDebug`) is not possible in this environment.
+The project can be built successfully using the standard Gradle command:
 
-**Workflow:**
+```bash
+./gradlew :app:assembleDebug
+```
 
-1.  Make the necessary code changes.
-2.  Submit the changes without running a build.
-3.  Add a note to the submission indicating that the build could not be verified due to environmental constraints.
+### Build Troubleshooting
+
+Previously, the build failed due to several issues. Here is a summary of the fixes:
+
+*   **`.gitignore` was missing:** The `.gitignore` file was missing entries for the `build/` and `.gradle/` directories, which caused the build to fail due to an excessive number of generated files. This has been corrected.
+*   **Outdated Dependencies:** The `androidx.media3` dependencies were outdated, leading to compilation errors. They have been updated to version `1.8.0`.
+*   **Incorrect `compileSdk`:** The `compileSdk` and `targetSdk` were set to `34`, but the updated dependencies required `35`. This has been corrected in `app/build.gradle`.
+*   **Missing Imports:** The `SilenceMediaBrowserService.kt` file was missing necessary imports for `LibraryResult` and `LibraryParams`. These have been added.

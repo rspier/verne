@@ -1,1 +1,22 @@
 local.properties
+
+# Gradle files
+.gradle/
+build/
+
+# IDE files
+*.iml
+.idea/
+
+# Local build artifacts
+/app/build
+/app/libs
+/app/release
+/app/debug
+*.apk
+*.ap_
+*.aab
+
+# Keystore files
+*.jks
+*.keystore
