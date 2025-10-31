@@ -2,9 +2,9 @@ name: Silence CI
 
 on:
   push:
-    branches: [ "silence" ]
+    branches: [ "silence.*" ]
   pull_request:
-    branches: [ "silence" ]
+    branches: [ "silence.*" ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
