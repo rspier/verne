@@ -1,5 +1,8 @@
 package com.example.silence
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
 import android.os.Bundle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -19,6 +22,17 @@ class SilenceMediaBrowserService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
+
+        val channelId = "silence"
+        val channel = NotificationChannel(
+            channelId,
+            "Silence",
+            NotificationManager.IMPORTANCE_DEFAULT
+        )
+        val notificationManager =
+            getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.createNotificationChannel(channel)
+
         player = ExoPlayer.Builder(this).build()
         mediaLibrarySession =
             MediaLibrarySession.Builder(this, player, object : MediaLibrarySession.Callback {
@@ -50,6 +64,15 @@ class SilenceMediaBrowserService : MediaLibraryService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? {
         return mediaLibrarySession
+    }
+
+    override fun onDestroy() {
+        mediaLibrarySession?.run {
+            player.release()
+            release()
+            mediaLibrarySession = null
+        }
+        super.onDestroy()
     }
 
     private fun getRootItem(): MediaItem {
